@@ -1,0 +1,88 @@
+---
+title: "Ames_EDA_Linear_Regression"
+author: "Iman Singh"
+date: "2/1/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(ggplot2)
+library(purrr)
+```
+
+Step 1: Understanding the Problem:
+
+We are asked to predict house prices in Ames, Iowa based on 79 explanatory variables, and are given roughly equal sized training and test datasets (1460 and 1459 observations, respectively).
+
+
+Even before looking at the data, my intuition is that multivariate linear regression techniques may be a good way to approach this problem, because the price of a house seems to depend on several factors added together, but that we wil have to pay special attention to feature selection in order to reduce the variance of our model, feature engineering 
+
+
+```{r}
+df_train <- read.csv("train.csv", 
+                        header = TRUE, 
+                        na.strings = c("", "NA"),
+                        stringsAsFactors = TRUE)
+
+df_test <- read.csv("test.csv", 
+                        header = TRUE, 
+                        na.strings = c("", "NA"),
+                        stringsAsFactors = TRUE)
+
+```
+
+Let's check if they were imported as the right classes
+```{r}
+map_chr(df_train, class)
+```
+Looks like we need to change some of these classes!
+
+I want to make sure anything that tells us about the *type* of something is classified as a 'factor', and anything that tells us the *amount* of something is classified as an 'integer'. 
+
+It looks like everything that has already been classified as a factor is in the proper category, but several of the features have been incorrectly classified as integers:
+
+There are a few unambiguous cases of features mis-labeled as integers:
+`MSSubclass` - identifies the type of dwelling, and so is clearly categorical
+`MoSold` - identifies the month sold (1-12), and so is clearly categorical
+
+There are a few unambiguous cases of features correctly labeled as integers:
+All the features that measure square or linear footage measure an amount, not a type. And so are properly labeled as an integers. Our response variable, **SalePrice** is also correctly categorized as an integer because it measures the amount of money the house sold for. 
+
+There are additional cases that are (to me) pretty clearly categorical:
+OverallQual - rates the overall material and finish of the house (1-10). The rating assigns a type to the house, not an amount
+
+There is one very interesting 
+
+
+
+
+```{r}
+col_names_factor = c('MSSubClass', 'OverallQual', 'OverallCond')
+
+
+
+df_train[[cols_names_factor[1]]]
+
+df$train$col_names_ = as.factor(cols_to_make_factor[2])
+cols_to_make_factor = as.factor(cols_to_make_factor)
+as.factor(df_train$MSSubClass)
+class(df_train$MSSubClass)
+as.character(df_train$SaleType)
+class(df_train$SaleType) 
+## function to change type
+change_type = function(x, new_type){
+  map_chr(x, typeof(x) = new_type)
+}
+```
+
+
+```{r}
+ggplot(df_train, aes(x = SaleType)) +
+  stat_count()
+```
+
