@@ -10,20 +10,24 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-```{r}
+```{r import libraries}
 library(ggplot2)
 library(purrr)
+library(dplyr)
+library(mice)
+library(VIM)
+library(Hmisc)
 ```
 
-Step 1: Understanding the Problem:
+## Step 1: Understanding the Problem:
 
 We are asked to predict house prices in Ames, Iowa based on 79 explanatory variables, and are given roughly equal sized training and test datasets (1460 and 1459 observations, respectively).
 
 
-Even before looking at the data, my intuition is that multivariate linear regression techniques may be a good way to approach this problem, because the price of a house seems to depend on several factors added together, but that we wil have to pay special attention to feature selection in order to reduce the variance of our model, feature engineering 
+Even before looking at the data, my intuition is that multivariate linear regression techniques may be a good way to approach this problem, because the price of a house seems to depend on several factors added together, but that we wil have to pay special attention to feature selection in order to reduce the variance of our model, feature engineering. Also, response variable is numeric. 
 
 
-```{r}
+```{r import data}
 df_train <- read.csv("train.csv", 
                         header = TRUE, 
                         na.strings = c("", "NA"),
@@ -36,53 +40,443 @@ df_test <- read.csv("test.csv",
 
 ```
 
+```{r drop Id and SalePrice}
+
+# Save ID column
+train_Id = df_train$Id
+test_Id = df_test$Id
+
+# Drop ID column since we can't use it as a feature
+df_train = subset(df_train, select = -Id)
+df_test = subset(df_test, select = -Id)
+
+# Save SalePrice
+response_variable = df_train$SalePrice
+
+# Drop SalePrice so we don't accidentally use it as feature (when doing MICE imputation, for example)
+df_train = subset(df_train, select = -SalePrice)
+
+# Drop Utilities - it cant be used as a predictor because all values in training dataset are 'AllPub' except one 'NoSeWa'. All values in test dataset are 'AllPub' except two 'NA'. With such little variation (possibly none in test, depending on imputation), there is no predictive value
+df_train = subset(df_train, select = -Utilities)
+df_test = subset(df_test, select = -Utilities)
+```
+
+
+
+Missing Values
+We used the below strategies for dealing with missing values
+
+Flagging as 'None'
+Features	Alley, BsmtCond, BsmtQual, BsmtExposure, BsmtFinType1, BsmtFinType2, Fence, Functional, FireplaceQu, GarageCond, GarageFinish, GarageQual, GarageType, , MiscFeature, PoolQC
+ 
+
+# - ths one is problematic: MasVnrType, MSSubClass
+
+In many cases, we want the model to treat observations with missing values as a separate category. For example, we know from the data description that a missing value for ‘PoolQC’ means that the house does not have a pool. It is important to let the algorithm know that some homes do not have pools, because this may affect their value, so we flag the missing values as ‘none’.
+
+This same rationale applies to all but one these features - the house in question does not have the attribute being measured, so we enter the value as 'none'. The only exception is 'Functional' - we still want to flag the missing values for this feature, but we assign the value ‘typ’ instead of 'none' because the data description says that missing values here mean ‘typical functionality’.
+
+Impute Zero 
+Features	GarageYrBlt
+ 
+This sorta works. Flags as different. Not sure of the statistical validity here. 
+
+Impute the Mode
+Features	 Exterior1st, Exterior2nd, KitchenQual, Electrical, MSZoning
+ 
+
+For these categorial features, we knew the house had the attribute being measured, so we could not impute 'none'. In all the cases, there was one dominant value for most of the data and so we decided to impute the mode as the value of the missing data because, assuming the data are missing completely at random, it is probable that they (like most of the observations) have the most typical value.
+
+Impute the Median by Neighborhood
+Features	LotFrontage
+ 
+
+For LotFrontage, we needed to impute a value because it does not make sense that a house is actually missing the attribute. Instead of imputing the median value for the entire dataset, we decided to impute the median for the neighborhood the house is located in to give us a more accurate estimate
+
+
+
+```{r flag as none}
+# Missing Values
+# Flag as None
+#	Alley, BsmtCond, BsmtQual, BsmtExposure, BsmtFinType1, BsmtFinType2, Fence, FireplaceQu, GarageCond, GarageFinish, GarageQual, GarageType, MiscFeature, PoolQC
+
+# check missing values
+sapply(df_train, function(x) sum(is.na(x)))
+sapply(df_test, function(x) sum(is.na(x)))
+
+flag_as_none = function(df) {
+  df = df %>%
+    mutate(Alley = ifelse(is.na(Alley), 'None', levels(Alley)),
+           BsmtCond = ifelse(is.na(BsmtCond), 'None', levels(BsmtCond)),
+           BsmtQual = ifelse(is.na(BsmtQual), 'None', levels(BsmtQual)),
+           BsmtExposure = 
+             ifelse(is.na(BsmtExposure), 'None', levels(BsmtExposure)),
+           BsmtFinType1 = 
+             ifelse(is.na(BsmtFinType1), 'None', levels(BsmtFinType1)),
+           BsmtFinType2 = 
+             ifelse(is.na(BsmtFinType2), 'None', levels(BsmtFinType2)),
+           Fence = ifelse(is.na(Fence), 'None', levels(Fence)),
+           FireplaceQu = 
+             ifelse(is.na(FireplaceQu), 'None', levels(FireplaceQu)),
+           GarageCond = 
+             ifelse(is.na(GarageCond), 'None', levels(GarageCond)),
+           GarageFinish = 
+             ifelse(is.na(GarageFinish), 'None', levels(GarageFinish)),
+           GarageQual = 
+             ifelse(is.na(GarageQual), 'None', levels(GarageQual)),
+           GarageType = 
+             ifelse(is.na(GarageType), 'None', levels(GarageType)),
+           MiscFeature = 
+             ifelse(is.na(MiscFeature), 'None', levels(MiscFeature)),
+           PoolQC = ifelse(is.na(PoolQC), 'None', levels(PoolQC))
+           )
+}
+df_train = flag_as_none(df_train)
+df_test = flag_as_none(df_test)
+```
+
+
+```{r impute zero}
+impute_zero = function(df){
+  df = df %>%
+    mutate(GarageYrBlt = ifelse(is.na(GarageYrBlt), 0, GarageYrBlt),
+           BsmtFinSF1 = ifelse(is.na(BsmtFinSF1), 0, BsmtFinSF1),
+           BsmtFinSF2 = ifelse(is.na(BsmtFinSF2), 0, BsmtFinSF2),
+           BsmtUnfSF = ifelse(is.na(BsmtUnfSF), 0, BsmtUnfSF),
+           BsmtFullBath = ifelse(is.na(BsmtFullBath), 0, BsmtFullBath),
+           BsmtHalfBath = ifelse(is.na(BsmtHalfBath), 0, BsmtHalfBath),
+           TotalBsmtSF = ifelse(is.na(TotalBsmtSF), 0, TotalBsmtSF),
+           GarageCars = ifelse(is.na(GarageCars), 0, GarageCars), # this one is based on examination of the observation. Theory is that 'GarageType = 2Types' was entered in error
+          GarageArea = ifelse(is.na(GarageArea), 0, GarageArea),           )
+}
+
+df_train = impute_zero(df_train)
+df_test = impute_zero(df_test)
+```
+
+
+Impute the other ones:
+Electrical: 1
+MasVnrType: 8
+MasVnrArea: 8
+LotFrontage: 259
+MSZoning
+Utilities
+Exterior1st
+Exterior2nd
+MasVnrType
+MasVnrArea
+KitchenQual
+Functional
+SaleType
+
+
+
+```{r impute values using MICE}
+# need to make sure we don't use SalePrice in imputing data
+table(df_train$Electrical)
+table(df_train$MasVnrType)
+sum(is.na(df_train$MasVnrArea))
+hist(df_train$LotFrontage)
+table(df_train$LotFrontage)
+hist(df_train$MasVnrArea)
+table(df_train$MasVnrArea)
+
+train_imputed = mice(df_train, m = 1, method = 'cart') # needed to change method from default
+
+test_imputed = mice(df_test, m = 1, method = 'cart') # needed to change method from default
+
+# check if data that was imputed is plausible
+# LotFrontage
+hist(train_imputed$imp$LotFrontage[[1]])
+hist(df_train$LotFrontage)
+
+hist(test_imputed$imp$LotFrontage[[1]])
+hist(df_test$LotFrontage)
+
+# MasVnrArea
+hist(train_imputed$imp$MasVnrArea[[1]])
+hist(df_train$MasVnrArea)
+
+hist(test_imputed$imp$MasVnrArea[[1]])
+hist(df_test$MasVnrArea)
+
+# Electrical
+barchart(train_imputed$imp$Electrical[[1]])
+barchart(df_train$Electrical)
+
+barchart(test_imputed$imp$Electrical[[1]])
+barchart(df_test$Electrical)
+
+# MasVnrType
+barchart(train_imputed$imp$MasVnrType[[1]])
+barchart(df_train$MasVnrType)
+
+barchart(test_imputed$imp$MasVnrType[[1]])
+barchart(df_test$MasVnrType)
+
+# MSZoning
+barchart(train_imputed$imp$MSZoning[[1]])
+barchart(df_train$MSZoning)
+
+barchart(test_imputed$imp$MSZoning[[1]])
+barchart(df_test$MSZoning)
+
+# Exterior1st
+barchart(train_imputed$imp$Exterior1st[[1]])
+barchart(df_train$Exterior1st)
+
+barchart(test_imputed$imp$Exterior1st[[1]])
+barchart(df_test$Exterior1st)
+
+# Exterior2nd
+barchart(train_imputed$imp$Exterior2nd[[1]])
+barchart(df_train$Exterior2nd)
+
+barchart(test_imputed$imp$Exterior2nd[[1]])
+barchart(df_test$Exterior2nd)
+
+# KitchenQual
+barchart(train_imputed$imp$KitchenQual[[1]])
+barchart(df_train$KitchenQual)
+
+barchart(test_imputed$imp$KitchenQual[[1]])
+barchart(df_test$KitchenQual)
+
+# Functional
+barchart(train_imputed$imp$Functional[[1]])
+barchart(df_train$Functional)
+
+barchart(test_imputed$imp$Functional[[1]])
+barchart(df_test$Functional)
+
+# SaleType
+barchart(train_imputed$imp$SaleType[[1]])
+barchart(df_train$SaleType)
+
+barchart(test_imputed$imp$SaleType[[1]])
+barchart(df_test$SaleType)
+
+# Density Plots of imputed vs. non-imputed data (for numerical values)
+densityplot(train_imputed)
+densityplot(test_imputed)
+
+# update data tables
+df_train = complete(train_imputed, 1)
+df_test = complete(test_imputed, 1)
+
+```
+
 Let's check if they were imported as the right classes
-```{r}
+
+```{r check class}
 map_chr(df_train, class)
+map_chr(df_test, class)
 ```
 Looks like we need to change some of these classes!
 
 I want to make sure anything that tells us about the *type* of something is classified as a 'factor', and anything that tells us the *amount* of something is classified as an 'integer'. 
 
-It looks like everything that has already been classified as a factor is in the proper category, but several of the features have been incorrectly classified as integers:
+It looks like everything that has already been classified as a factor is in the proper category, but several of the features have been incorrectly classified as integers.
+
+But, before doing that we are going to first derive some features because we are going to take advantage of some features (the ones measuring the number of bathrooms, bedrooms and kitchens), being initially classified as integers. I  provide an argument for why these features should really be classified as factors, below.
+
+Derived Features:
+
+We can derive:
+OthrRmsAbvGr = TotalRms - (KitchenAbvGr + BedroomAbvGr + Bathroom + HalfBath)
+Adding all baths
+Adding Square Footage
+Adjusting for High Quality / Low Quality
+
+Others:
+OutdoorSF = WoodDeckSF + OpenPorchSF + EnclosedPorch + 3SsnPorch + ScreenPorch
+
+```{r derived features}
+# wrap it in a function so we can easily change df_test in the same way
+
+get_derived_features = function(df){
+ df = df %>%
+   mutate(TotalBaths = 
+            BsmtFullBath + (BsmtHalfBath * .5) + 
+            FullBath + (HalfBath * .5),
+          TotalSF = 
+            TotalBsmtSF + GrLivArea,
+          HighQualFinSF = 
+            TotalSF - LowQualFinSF,
+          OthrRmsAbvGrd = 
+            TotRmsAbvGrd -
+            (KitchenAbvGr + BedroomAbvGr + FullBath + HalfBath),
+          OutdoorSF =
+            (WoodDeckSF + OpenPorchSF + EnclosedPorch + X3SsnPorch)
+          )
+}
+df_train = get_derived_features(df_train)
+df_test = get_derived_features(df_test)
+```
+
+
+
+
+
+The features classified as integers should measure an amount, not a type. Therefore, all the features that measure square or linear footage are properly labeled as an integers (`LotFrontage`, `LotArea`, etc). There are also two features that measure price, which is an amount, and so are correctly labeled: `SalePrice` (our response variable), and `MiscVal` (even though this feature is categorized correctly, it is problematic in other ways that I will discuss below). 
 
 There are a few unambiguous cases of features mis-labeled as integers:
 `MSSubclass` - identifies the type of dwelling, and so is clearly categorical
 `MoSold` - identifies the month sold (1-12), and so is clearly categorical
+`OverallQual` - rates the overall material and finish of the house (1-10). The rating assigns a type to the house quality, not an amount
+`OverallCond` - rates the overall condition of the house(1-10). Again, this assigns a type to the house condition, not an amount. 
 
-There are a few unambiguous cases of features correctly labeled as integers:
-All the features that measure square or linear footage measure an amount, not a type. And so are properly labeled as an integers. Our response variable, **SalePrice** is also correctly categorized as an integer because it measures the amount of money the house sold for. 
+There are additional cases that (to me) are mis-labeled as integers:
+`BsmtFullBath`, `BsmtHalfBath`, `FullBath`, `HalfBath`, `BedroomAbvGr`, `KitchenAbvGr`, `TotRmsAbvGrd`, `Fireplaces`, `GarageCars`
+All the features listed above actually do measure the amount of things - bathrooms, bedrooms, kitchens, fireplaces, cars. So they have a case for being counted as integers. However, I would argue that, in the context of buying a house, they actually identify different types. I think, in the context of home value, a 2-bathroom house is a different type of house than a 3-bathroom house. Or, similarly, a 2-car garage is a different type than a 3-car garage. These features don't really measure a difference in degree, but type.
+To highlight the difference, I would argue that the squre footage features, correctly labeled as integers, do measure degree. A 2000 square foot house is different in degree from a 2500 square foot house, and each step along the continuum changes the degree. On the other hand, each additional bathroom changes the type of house from a 1-bathroom type, to a 2-bathroom type, etc.
+My argument works for most of the variables listed. I'm not confident it works for `TotalRoomsAbvGrd` or `Fireplaces` though. Once you're counting all the rooms, is a 7-room house different in type than a 8-room house? I'm not sure. And is a 1-fireplace house really different in type from a 2-fireplace house? Again, I'm not sure. As a compromise, I'll treat the total rooms value as an integer, but each of the specific rooms (Kitchen, Bath, Bedroom, Other) as factors. Similarly, I'll treat totalBaths as an iteger, but the specific full-bath and half-bath features as categorical. 
 
-There are additional cases that are (to me) pretty clearly categorical:
-OverallQual - rates the overall material and finish of the house (1-10). The rating assigns a type to the house, not an amount
+(we will eventually change bathrooms to factors, but first we will do some feature engineering)
 
-There is one very interesting 
+There is a type of feature that isn't really an integer or a factor: the 'Year' features:
+     `YearBuilt`  `YearRemodAdd`  `GarageYrBlt` `YrSold`
+  
+
+
+
+       
+ 
+
+`MiscVal` is an especially interesting feature because it is the dolar value of a miscellaneous feature (specified under `MiscFeature`) not covered by the other features. This feature is in the same units, dollars, as the response variable and is specifically supposed to capture value not captured by those features. 
+Because of this, it may be possible to train our model using all the features except `MiscFeature` and `MiscVal` and the response variable `SalePrice - MiscVal`, and then add the values from `MiscVal` back into the results before giving the predicted `SalePrice`. 
+
+
+
+
+```{r convert class}
+# convert class types for 'MSSubClass','MoSold', 'OverallQual', 'OverallCond')
+
+df_train$MSSubClass = as.factor(df_train$MSSubClass)
+df_train$MoSold = as.factor(df_train$MoSold)
+df_train$OverallQual = as.factor(df_train$OverallQual)
+df_train$OverallCond = as.factor(df_train$OverallCond)
+
+# do these after deriving features
+#`BsmtFullBath`, `BsmtHalfBath`, `FullBath`, `HalfBath`, `BedroomAbvGr`, 
+#`KitchenAbvGr`, `TotRmsAbvGrd`, `Fireplaces`, `GarageCars`
+
+df_train$BsmtFullBath = as.factor(df_train$BsmtFullBath)
+df_train$BsmtHalfBath = as.factor(df_train$BsmtHalfBath)
+df_train$FullBath = as.factor(df_train$FullBath)
+df_train$HalfBath = as.factor(df_train$HalfBath)
+df_train$BedroomAbvGr = as.factor(df_train$BedroomAbvGr)
+df_train$KitchenAbvGr = as.factor(df_train$KitchenAbvGr)
+df_train$Fireplaces = as.factor(df_train$Fireplaces)
+df_train$GarageCars = as.factor(df_train$GarageCars)
+
+# do the same thing to df_test
+df_test$MSSubClass = as.factor(df_test$MSSubClass)
+df_test$MoSold = as.factor(df_test$MoSold)
+df_test$OverallQual = as.factor(df_test$OverallQual)
+df_test$OverallCond = as.factor(df_test$OverallCond)
+df_test$BsmtFullBath = as.factor(df_test$BsmtFullBath)
+df_test$BsmtHalfBath = as.factor(df_test$BsmtHalfBath)
+df_test$FullBath = as.factor(df_test$FullBath)
+df_test$HalfBath = as.factor(df_test$HalfBath)
+df_test$BedroomAbvGr = as.factor(df_test$BedroomAbvGr)
+df_test$KitchenAbvGr = as.factor(df_test$KitchenAbvGr)
+df_test$Fireplaces = as.factor(df_test$Fireplaces)
+df_test$GarageCars = as.factor(df_test$GarageCars)
+```
+
+
+
+In addition to the ones below, should do basementfinsf X basmentFinType (need to bin)
+# PoolArea * PoolQC (need to bin)
+MasVnrType * MasVnrArea (need to bin)
+
+Kitchen * KitchenQual
+Fireplaces * FireplaceQu
+GarageType * GarageQual
+GarageQual * GarageCond
+GarageType * GarageCond
+LandContour * LandSlope
+Condition1 * Condition2 
+
+```{r feature interactions}
+# feature interactions
+# OverallQuality*OverallCond	
+# ExterQual*ExterCond
+# BsmtQual*BsmtCond	GarageQual*GarageCond
+# Heating*HeatingQC	SaleType*SaleCondition
+# Neighborhood*BldgType
+hist(df_train$MasVnrArea[df_train$MasVnrArea > 0])
+hist(df_test$MasVnrArea[df_test$MasVnrArea > 0])
+plot(df_train$MasVnrArea, response_variable)
+
+# Divide MasVnrArea into bins
+MasVnrAreaCut = cut2(df_test$MasVnrArea)
+levels(MasVnrAreaCut) = c('1', '2', '3', '4', '5') # change levels to something easier to print
+
+get_interaction_features = function(df){
+ df = df %>%
+   mutate(OverallQualXOverallCond = 
+            paste(OverallQual, '*', OverallCond, sep = ''),
+          ExterQualXExterCond = 
+            paste(ExterQual, '*', ExterCond, sep = ''),
+          BsmtQualXBsmtCond = 
+            paste(BsmtQual, '*', BsmtCond, sep = ''),
+          GarageQualXGarageCond = 
+            paste(GarageQual, '*', GarageCond, sep = ''),
+          HeatingXHeatingQC = 
+            paste(Heating, '*', HeatingQC, sep = ''),
+          SaleTypeXSaleCondition = 
+            paste(SaleType, '*', SaleCondition, sep = ''),
+          NeighborhoodXBldgType = 
+            paste(Neighborhood, '*', BldgType, sep = ''),
+          MasVnrAreaCutXMasVnrType = 
+            paste(MasVnrAreaCut, '*', MasVnrType, sep = ''),
+          KitchenAbvGrXKitchenQual = 
+            paste(KitchenAbvGr, '*', KitchenQual, sep = ''),
+          FireplacesXFireplaceQu = 
+            paste(Fireplaces, '*', FireplaceQu, sep = ''),
+          GarageTypeXGarageQual = 
+            paste(GarageType, '*', GarageQual, sep = ''),
+          GarageTypeXGarageCond = 
+            paste(GarageType, '*', GarageCond, sep = ''),
+          GarageQualXGarageCond = 
+            paste(GarageQual, '*', GarageCond, sep = ''),
+          LandContourXLandSlope = 
+            paste(LandContour, '*', LandSlope, sep = ''),
+          Condition1XCondition2 = 
+            paste(Condition1, '*', Condition2, sep = '')
+          )
+}
+
+df_train = get_interaction_features(df_train)
+df_test = get_interaction_features(df_test)
+```
+
 
 
 
 
 ```{r}
-col_names_factor = c('MSSubClass', 'OverallQual', 'OverallCond')
+imputed$imp$MasVnrType
+hist(test$imp$LotFrontage[[1]])
+complete_data = complete(test, 1)
+complete_data
+densityplot(test)
+stripplot(test)
+```
 
-
-
-df_train[[cols_names_factor[1]]]
-
-df$train$col_names_ = as.factor(cols_to_make_factor[2])
-cols_to_make_factor = as.factor(cols_to_make_factor)
-as.factor(df_train$MSSubClass)
-class(df_train$MSSubClass)
-as.character(df_train$SaleType)
-class(df_train$SaleType) 
-## function to change type
-change_type = function(x, new_type){
-  map_chr(x, typeof(x) = new_type)
-}
+```{r}
+hist(df_train$LotFrontage)
 ```
 
 
 ```{r}
-ggplot(df_train, aes(x = SaleType)) +
-  stat_count()
+ggplot(df_train[df_train$PoolArea != 0, ], aes(x = PoolArea)) +
+  #stat_count()
+    geom_histogram()
+summary(df_train$PoolArea)
+sum(is.na(df_train$PoolArea))
 ```
 
