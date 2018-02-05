@@ -17,6 +17,10 @@ library(dplyr)
 library(mice)
 library(VIM)
 library(Hmisc)
+library(MASS)
+library(corrplot)
+library(car)
+library(glmnet)
 ```
 
 ## Step 1: Understanding the Problem:
@@ -388,7 +392,8 @@ df_test$GarageCars = as.factor(df_test$GarageCars)
 
 
 
-In addition to the ones below, should do basementfinsf X basmentFinType (need to bin)
+In addition to the ones below, should do 
+basementfinsf X basmentFinType (need to bin)
 # PoolArea * PoolQC (need to bin)
 MasVnrType * MasVnrArea (need to bin)
 
@@ -411,9 +416,17 @@ hist(df_train$MasVnrArea[df_train$MasVnrArea > 0])
 hist(df_test$MasVnrArea[df_test$MasVnrArea > 0])
 plot(df_train$MasVnrArea, response_variable)
 
+#Divide BsmtFinSF1
+BsmtFinSF1_cut = cut2(df_test$BsmtFinSF1) 
+levels(BsmtFinSF1_cut) = c(seq(1:8))
+
+#Divide BsmtFinSF2
+BsmtFinSF2_cut = cut2(df_test$BsmtFinSF2) 
+levels(BsmtFinSF2_cut) = c(seq(1:3))
+
 # Divide MasVnrArea into bins
-MasVnrAreaCut = cut2(df_test$MasVnrArea)
-levels(MasVnrAreaCut) = c('1', '2', '3', '4', '5') # change levels to something easier to print
+MasVnrArea_cut = cut2(df_test$MasVnrArea) 
+levels(MasVnrArea_cut) = c(seq(1:5)) # change levels to something easier to print
 
 get_interaction_features = function(df){
  df = df %>%
@@ -423,6 +436,10 @@ get_interaction_features = function(df){
             paste(ExterQual, '*', ExterCond, sep = ''),
           BsmtQualXBsmtCond = 
             paste(BsmtQual, '*', BsmtCond, sep = ''),
+          BsmtFinSF1XBsmtFinType1 = 
+            paste(BsmtFinSF1_cut, '*', BsmtFinType1, sep = ''),
+          BsmtFinSF2XBsmtFinType2 = 
+            paste(BsmtFinSF2_cut, '*', BsmtFinType2, sep = ''),
           GarageQualXGarageCond = 
             paste(GarageQual, '*', GarageCond, sep = ''),
           HeatingXHeatingQC = 
@@ -431,8 +448,8 @@ get_interaction_features = function(df){
             paste(SaleType, '*', SaleCondition, sep = ''),
           NeighborhoodXBldgType = 
             paste(Neighborhood, '*', BldgType, sep = ''),
-          MasVnrAreaCutXMasVnrType = 
-            paste(MasVnrAreaCut, '*', MasVnrType, sep = ''),
+          MasVnrAreaXMasVnrType = 
+            paste(MasVnrArea_cut, '*', MasVnrType, sep = ''),
           KitchenAbvGrXKitchenQual = 
             paste(KitchenAbvGr, '*', KitchenQual, sep = ''),
           FireplacesXFireplaceQu = 
@@ -455,16 +472,55 @@ df_test = get_interaction_features(df_test)
 ```
 
 
+## Correlation Matrix
 
+Log transform:
+respose_variable
+LotFrontage
+LotArea
+```{r}
+# check distributions of target variable and all numerics 
 
+sapply(df_train, class)
+
+hist(log(df_train$LotFrontage))
+
+attach(df_train)
+hist(log(LotArea))
+hist(YearBuilt)
+hist(YearRemodAdd)
+hist(log(MasVnrArea))
+BsmtFinSF1
+BsmtFinSF2
+BsmtUnfSF
+TotalBsmtSF
+X1stFlrSF
+X2ndFlrSF
+LowQualFinSF
+GrLivArea
+TotRmsAbvGrd
+GarageYrBlt
+GarageArea
+WoodDeckSF
+OpenPorchSF
+EnclosedPorch
+X3SsnPorch
+ScreenPorch
+PoolArea
+MiscVal
+YrSold
+TotalBaths
+TotalSF
+HighQualFinSF
+OthrRmsAbvGrd
+OutdoorSF
+
+Alley, BsmtQual, BsmtCondition, BsmtExposure, BsmtFinType1, BsmtFinType2, FireplaceQu, GarageType, GarageFinish, GarageQual, GarageCond  = character
+
+```
 
 ```{r}
-imputed$imp$MasVnrType
-hist(test$imp$LotFrontage[[1]])
-complete_data = complete(test, 1)
-complete_data
-densityplot(test)
-stripplot(test)
+df$train
 ```
 
 ```{r}
@@ -478,5 +534,138 @@ ggplot(df_train[df_train$PoolArea != 0, ], aes(x = PoolArea)) +
     geom_histogram()
 summary(df_train$PoolArea)
 sum(is.na(df_train$PoolArea))
+```
+
+```{r}
+
+ggplot(response_variable, aes(x = response_variable)) +
+  geom_histogram()
+
+hist(response_variable)
+hist(log(response_variable))
+
+```
+
+
+
+## Data Transformations
+
+
+```{r}
+model = lm(response_variable ~ ., data = df_train)
+summary(model)
+```
+
+```{r}
+plot(model)
+vif(model) # doesn't work - perfect multicollinerarity
+av.plots(model)
+
+model.full = model
+model.empty = lm(response_variable ~ 1, data = df_train)
+scope = list(lower = formula(model.empty), upper = formula(model.full))
+
+
+#Stepwise regression using AIC as the criteria (the penalty k = 2).
+forwardAIC = step(model.empty, scope, direction = "forward", k = 2)
+backwardAIC = step(model.full, scope, direction = "backward", k = 2)
+bothAIC.empty = step(model.empty, scope, direction = "both", k = 2)
+bothAIC.full = step(model.full, scope, direction = "both", k = 2)
+
+#Stepwise regression using BIC as the criteria (the penalty k = log(n)).
+forwardBIC = step(model.empty, scope, direction = "forward", k = log(1460))
+backwardBIC = step(model.full, scope, direction = "backward", k = log(1460))
+bothBIC.empty = step(model.empty, scope, direction = "both", k = log(1460))
+bothBIC.full = step(model.full, scope, direction = "both", k = log(1460))
+
+```
+```{r}
+influencePlot(forwardAIC)
+```
+
+```{r}
+#Need matrices for glmnet() function. Automatically conducts conversions as well
+#for factor variables into dummy variables.
+x = model.matrix(response_variable ~ ., df_train)[, -1] #Dropping the intercept column.
+y = response_variable
+
+#Values of lambda over which to check.
+grid = 10^seq(5, -2, length = 100)
+
+#Fitting the ridge regression. Alpha = 0 for ridge regression.
+ridge.models = glmnet(x, y, alpha = 0, lambda = grid)
+
+dim(coef(ridge.models)) #20 different coefficients, estimated 100 times --
+#once each per lambda value.
+coef(ridge.models) #Inspecting the various coefficient estimates.
+
+#What do the estimates look like for a smaller value of lambda?
+ridge.models$lambda[80] #Lambda = 0.2595.
+coef(ridge.models)[, 80] #Estimates not close to 0.
+sqrt(sum(coef(ridge.models)[-1, 80]^2)) #L2 norm is 136.8179.
+
+#What do the estimates look like for a larger value of lambda?
+ridge.models$lambda[15] #Lambda = 10,235.31.
+coef(ridge.models)[, 15] #Most estimates close to 0.
+sqrt(sum(coef(ridge.models)[-1, 15]^2)) #L2 norm is 7.07.
+
+#Visualizing the ridge regression shrinkage.
+plot(ridge.models, xvar = "lambda", label = TRUE, main = "Ridge Regression")
+
+#Can use the predict() function to obtain ridge regression coefficients for a
+#new value of lambda, not necessarily one that was within our grid:
+predict(ridge.models, s = 50, type = "coefficients")
+
+#Creating training and testing sets. Here we decide to use a 70-30 split with
+#approximately 70% of our data in the training set and 30% of our data in the
+#test set.
+set.seed(0)
+train = sample(1:nrow(x), 7*nrow(x)/10)
+test = (-train)
+y.test = y[test]
+
+length(train)/nrow(x)
+length(y.test)/nrow(x)
+
+#Let's attempt to fit a ridge regression using some arbitrary value of lambda;
+#we still have not yet figured out what the best value of lambda should be!
+#We will arbitrarily choose 5. We will now use the training set exclusively.
+ridge.models.train = glmnet(x[train, ], y[train], alpha = 0, lambda = grid)
+ridge.lambda5 = predict(ridge.models.train, s = 5, newx = x[test, ])
+mean((ridge.lambda5 - y.test)^2)
+
+#Here, the MSE is approximately 115,541.
+
+#What would happen if we fit a ridge regression with an extremely large value
+#of lambda? Essentially, fitting a model with only an intercept:
+ridge.largelambda = predict(ridge.models.train, s = 1e10, newx = x[test, ])
+mean((ridge.largelambda - y.test)^2)
+
+#Here, the MSE is much worse at aproximately 208,920.
+
+#Instead of arbitrarily choosing random lambda values and calculating the MSE
+#manually, it's a better idea to perform cross-validation in order to choose
+#the best lambda over a slew of values.
+
+#Running 10-fold cross validation.
+set.seed(0)
+cv.ridge.out = cv.glmnet(x[train, ], y[train],
+                         lambda = grid, alpha = 0, nfolds = 10)
+plot(cv.ridge.out, main = "Ridge Regression\n")
+bestlambda.ridge = cv.ridge.out$lambda.min
+bestlambda.ridge
+log(bestlambda.ridge)
+
+#What is the test MSE associated with this best value of lambda?
+ridge.bestlambdatrain = predict(ridge.models.train, s = bestlambda.ridge, newx = x[test, ])
+mean((ridge.bestlambdatrain - y.test)^2)
+
+#Here the MSE is lower at approximately 113,173; a further improvement
+#on that which we have seen above. With "cv.ridge.out", we can actually access
+#the best model from the cross validation without calling "ridge.models.train"
+#or "bestlambda.ridge":
+ridge.bestlambdatrain = predict.cv.glmnet(cv.ridge.out, s ="lambda.min", newx = x[test, ])
+mean((ridge.bestlambdatrain - y.test)^2)
+
 ```
 
