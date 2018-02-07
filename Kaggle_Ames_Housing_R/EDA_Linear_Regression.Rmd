@@ -21,6 +21,8 @@ library(MASS)
 library(corrplot)
 library(car)
 library(glmnet)
+library(gridExtra)
+library(tabplot)
 ```
 
 ## Step 1: Understanding the Problem:
@@ -134,6 +136,23 @@ flag_as_none = function(df) {
              ifelse(is.na(MiscFeature), 'None', levels(MiscFeature)),
            PoolQC = ifelse(is.na(PoolQC), 'None', levels(PoolQC))
            )
+  df$Alley = as.factor(df$Alley)
+  df$BsmtCond = as.factor(df$BsmtCond)
+  df$BsmtQual = as.factor(df$BsmtQual)
+  df$BsmtExposure = as.factor(df$BsmtExposure)
+  df$BsmtFinType1 = as.factor(df$BsmtFinType1)
+  df$BsmtFinType2 = as.factor(df$BsmtFinType2)
+  df$Fence = as.factor(df$Fence)
+  df$FireplaceQu = as.factor(df$FireplaceQu)
+  df$FireplaceQu = as.factor(df$FireplaceQu)
+  df$GarageCond = as.factor(df$GarageCond)
+  df$GarageFinish = as.factor(df$GarageFinish)
+  df$GarageQual = as.factor(df$GarageQual)
+  df$GarageType = as.factor(df$GarageType)
+  df$MiscFeature = as.factor(df$MiscFeature)
+  df$PoolQC = as.factor(df$PoolQC)
+  
+  return(df)
 }
 df_train = flag_as_none(df_train)
 df_test = flag_as_none(df_test)
@@ -151,7 +170,8 @@ impute_zero = function(df){
            BsmtHalfBath = ifelse(is.na(BsmtHalfBath), 0, BsmtHalfBath),
            TotalBsmtSF = ifelse(is.na(TotalBsmtSF), 0, TotalBsmtSF),
            GarageCars = ifelse(is.na(GarageCars), 0, GarageCars), # this one is based on examination of the observation. Theory is that 'GarageType = 2Types' was entered in error
-          GarageArea = ifelse(is.na(GarageArea), 0, GarageArea),           )
+          GarageArea = ifelse(is.na(GarageArea), 0, GarageArea)
+          )
 }
 
 df_train = impute_zero(df_train)
@@ -177,17 +197,10 @@ SaleType
 
 
 ```{r impute values using MICE}
-# need to make sure we don't use SalePrice in imputing data
-table(df_train$Electrical)
-table(df_train$MasVnrType)
-sum(is.na(df_train$MasVnrArea))
-hist(df_train$LotFrontage)
-table(df_train$LotFrontage)
-hist(df_train$MasVnrArea)
-table(df_train$MasVnrArea)
+
+# impute using MICE
 
 train_imputed = mice(df_train, m = 1, method = 'cart') # needed to change method from default
-
 test_imputed = mice(df_test, m = 1, method = 'cart') # needed to change method from default
 
 # check if data that was imputed is plausible
@@ -270,6 +283,9 @@ df_train = complete(train_imputed, 1)
 df_test = complete(test_imputed, 1)
 
 ```
+```{r}
+sapply(df_test, function(x) sum(is.na(x)))
+```
 
 Let's check if they were imported as the right classes
 
@@ -302,17 +318,21 @@ OutdoorSF = WoodDeckSF + OpenPorchSF + EnclosedPorch + 3SsnPorch + ScreenPorch
 get_derived_features = function(df){
  df = df %>%
    mutate(TotalBaths = 
-            BsmtFullBath + (BsmtHalfBath * .5) + 
-            FullBath + (HalfBath * .5),
+            as.numeric(BsmtFullBath) + (as.numeric(BsmtHalfBath) * .5) + 
+            as.numeric(FullBath) + (as.numeric(HalfBath) * .5),
           TotalSF = 
             TotalBsmtSF + GrLivArea,
           HighQualFinSF = 
             TotalSF - LowQualFinSF,
           OthrRmsAbvGrd = 
             TotRmsAbvGrd -
-            (KitchenAbvGr + BedroomAbvGr + FullBath + HalfBath),
+            (as.numeric(KitchenAbvGr) + as.numeric(BedroomAbvGr)),
           OutdoorSF =
-            (WoodDeckSF + OpenPorchSF + EnclosedPorch + X3SsnPorch)
+            (WoodDeckSF + OpenPorchSF + EnclosedPorch + X3SsnPorch + ScreenPorch),
+          # Min date for YearRemodAdd = 1950. We do not have info about homes remodeled
+          # before 1950, so this captures info in case older homes were never remodeled
+          YearLastUpdated =  
+            ifelse(YearRemodAdd > 1950, YearRemodAdd, YearBuilt)
           )
 }
 df_train = get_derived_features(df_train)
@@ -355,39 +375,27 @@ Because of this, it may be possible to train our model using all the features ex
 
 
 ```{r convert class}
-# convert class types for 'MSSubClass','MoSold', 'OverallQual', 'OverallCond')
 
-df_train$MSSubClass = as.factor(df_train$MSSubClass)
-df_train$MoSold = as.factor(df_train$MoSold)
-df_train$OverallQual = as.factor(df_train$OverallQual)
-df_train$OverallCond = as.factor(df_train$OverallCond)
+convert_classes = function(df){
+  df$MSSubClass = as.factor(df$MSSubClass)
+  df$MoSold = as.factor(df$MoSold)
+  df$OverallQual = as.factor(df$OverallQual)
+  df$OverallCond = as.factor(df$OverallCond)
 
-# do these after deriving features
-#`BsmtFullBath`, `BsmtHalfBath`, `FullBath`, `HalfBath`, `BedroomAbvGr`, 
-#`KitchenAbvGr`, `TotRmsAbvGrd`, `Fireplaces`, `GarageCars`
+  # only do these after deriving features
+  df$BsmtFullBath = as.factor(df$BsmtFullBath)
+  df$BsmtHalfBath = as.factor(df$BsmtHalfBath)
+  df$FullBath = as.factor(df$FullBath)
+  df$HalfBath = as.factor(df$HalfBath)
+  df$BedroomAbvGr = as.factor(df$BedroomAbvGr)
+  df$KitchenAbvGr = as.factor(df$KitchenAbvGr)
+  df$Fireplaces = as.factor(df$Fireplaces)
+  df$GarageCars = as.factor(df$GarageCars)
+  return(df)
+}
 
-df_train$BsmtFullBath = as.factor(df_train$BsmtFullBath)
-df_train$BsmtHalfBath = as.factor(df_train$BsmtHalfBath)
-df_train$FullBath = as.factor(df_train$FullBath)
-df_train$HalfBath = as.factor(df_train$HalfBath)
-df_train$BedroomAbvGr = as.factor(df_train$BedroomAbvGr)
-df_train$KitchenAbvGr = as.factor(df_train$KitchenAbvGr)
-df_train$Fireplaces = as.factor(df_train$Fireplaces)
-df_train$GarageCars = as.factor(df_train$GarageCars)
-
-# do the same thing to df_test
-df_test$MSSubClass = as.factor(df_test$MSSubClass)
-df_test$MoSold = as.factor(df_test$MoSold)
-df_test$OverallQual = as.factor(df_test$OverallQual)
-df_test$OverallCond = as.factor(df_test$OverallCond)
-df_test$BsmtFullBath = as.factor(df_test$BsmtFullBath)
-df_test$BsmtHalfBath = as.factor(df_test$BsmtHalfBath)
-df_test$FullBath = as.factor(df_test$FullBath)
-df_test$HalfBath = as.factor(df_test$HalfBath)
-df_test$BedroomAbvGr = as.factor(df_test$BedroomAbvGr)
-df_test$KitchenAbvGr = as.factor(df_test$KitchenAbvGr)
-df_test$Fireplaces = as.factor(df_test$Fireplaces)
-df_test$GarageCars = as.factor(df_test$GarageCars)
+df_train = convert_classes(df_train)
+df_test = convert_classes(df_test)
 ```
 
 
@@ -414,7 +422,6 @@ Condition1 * Condition2
 # Neighborhood*BldgType
 hist(df_train$MasVnrArea[df_train$MasVnrArea > 0])
 hist(df_test$MasVnrArea[df_test$MasVnrArea > 0])
-plot(df_train$MasVnrArea, response_variable)
 
 #Divide BsmtFinSF1
 BsmtFinSF1_cut = cut2(df_test$BsmtFinSF1) 
@@ -463,8 +470,31 @@ get_interaction_features = function(df){
           LandContourXLandSlope = 
             paste(LandContour, '*', LandSlope, sep = ''),
           Condition1XCondition2 = 
-            paste(Condition1, '*', Condition2, sep = '')
+            paste(Condition1, '*', Condition2, sep = ''),
+          RoofStyleXRoofMatl = 
+            paste(RoofStyle, '*', RoofMatl, sep = '')
           )
+ 
+ # convert classes to factor
+ df$OverallQualXOverallCond = as.factor(df$OverallQualXOverallCond)
+ df$ExterQualXExterCond = as.factor(df$ExterQualXExterCond)
+ df$BsmtQualXBsmtCond = as.factor(df$BsmtQualXBsmtCond)
+ df$BsmtFinSF1XBsmtFinType1 = as.factor(df$BsmtFinSF1XBsmtFinType1)
+ df$BsmtFinSF2XBsmtFinType2 = as.factor(df$BsmtFinSF2XBsmtFinType2)
+ df$GarageQualXGarageCond = as.factor(df$GarageQualXGarageCond)
+ df$HeatingXHeatingQC = as.factor(df$HeatingXHeatingQC)
+ df$NeighborhoodXBldgType = as.factor(df$NeighborhoodXBldgType)
+ df$MasVnrAreaXMasVnrType = as.factor(df$MasVnrAreaXMasVnrType)
+ df$KitchenAbvGrXKitchenQual = as.factor(df$KitchenAbvGrXKitchenQual)
+ df$FireplacesXFireplaceQu = as.factor(df$FireplacesXFireplaceQu)
+ df$GarageTypeXGarageQual = as.factor(df$GarageTypeXGarageQual)
+ df$GarageTypeXGarageCond = as.factor(df$GarageTypeXGarageCond)
+ df$GarageQualXGarageCond = as.factor(df$GarageQualXGarageCond)
+ df$LandContourXLandSlope = as.factor(df$OverallQualXOverallCond)
+ df$Condition1XCondition2 = as.factor(df$OverallQualXOverallCond)
+ df$RoofStyleXRoofMatl = as.factor(df$RoofStyleXRoofMatl)
+ 
+ return(df)
 }
 
 df_train = get_interaction_features(df_train)
@@ -478,18 +508,163 @@ Log transform:
 respose_variable
 LotFrontage
 LotArea
-```{r}
+MasVnrArea
+BsmtFinSF1
+BsmtUnfSF
+TotalBsmtSF
+X1stFlrSF
+X2ndFlrSF
+LowQualFinSF
+GrLivArea
+TotRmsAbvGrd
+GarageArea
+WoodDeckSF
+OpenPorchSF
+EnclosedPorch
+X3SsnPorch
+ScreenPorch
+PoolArea
+MiscVal
+TotalBaths
+TotalSF
+HighQualFinSF
+OthrRmsAbvGrd + 2
+OutdoorSF
+
+
+## Data Transformations
+
+
+```{r log transformation}
 # check distributions of target variable and all numerics 
+log_transformation = function(df) {
+  df = df %>%
+    mutate(LotArea = log(LotArea),
+           LotFrontage = log(LotFrontage),
+           MasVnrArea = log(MasVnrArea),
+           BsmtFinSF1 = log(BsmtFinSF1),
+           BsmtFinSF2 = log(BsmtFinSF2),
+           TotalBsmtSF = log(TotalBsmtSF),
+           X1stFlrSF = log(X1stFlrSF),
+           X2ndFlrSF = log(X2ndFlrSF),
+           LowQualFinSF = log(LowQualFinSF),
+           GrLivArea = log(GrLivArea),
+           TotRmsAbvGrd = log(TotRmsAbvGrd),
+           GarageArea = log(GarageArea),
+           WoodDeckSF = log(WoodDeckSF),
+           OpenPorchSF = log(OpenPorchSF),
+           EnclosedPorch = log(EnclosedPorch),
+           X3SsnPorch = log(X3SsnPorch),
+           ScreenPorch = log(ScreenPorch),
+           PoolArea = log(PoolArea),
+           MiscVal = log(MiscVal),
+           TotalBaths = log(TotalBaths),
+           TotalSF = log(TotalSF),
+           HighQualFinSF = log(HighQualFinSF),
+           OthrRmsAbvGrd = log(OthrRmsAbvGrd),
+           OutdoorSF = log(OutdoorSF)
+    )
+}
+           
+# change response_variable to log(response_variable) - need to remember to convert back with exp(response_variable) when predicting prices
+response_variable = log(response_variable)
 
-sapply(df_train, class)
+# modify test and train dataframes
+df_train = log_transformation(df_train)
+df_test = log_transformation(df_test)
+```
 
-hist(log(df_train$LotFrontage))
+```{r}
+names(df_train)
+```
 
-attach(df_train)
-hist(log(LotArea))
-hist(YearBuilt)
-hist(YearRemodAdd)
-hist(log(MasVnrArea))
+```{r}
+map_chr(df_train, class)
+map_chr(df_test, class)
+
+```
+
+Categorical:
+MSSubclass
+MSZoning
+Street
+Alley
+LotShape
+LandContour
+LotConfig
+LandSlope
+Neighborhood
+Condition1
+Condition2
+BldgType
+HouseStyle
+OverallQual
+OverallCond
+RoofStyle
+RoofMatl
+Exterior1st
+Exterior2nd
+MasVnrType
+ExterQual
+ExterCond
+Foundation
+BsmtQual
+BsmtCond
+BsmtExposure
+BsmtFinType1
+BsmtFinType2
+Heating
+HeatingQC
+CentralAir
+Electrical
+BsmtFullBath
+BsmtHalfBath
+FullBath
+HalfBath
+BedroomAbvGr
+KitchenAbvGr
+KitchenQual
+Functional
+Fireplaces
+FireplaceQu
+GarageType
+GarageFinish
+GarageCars
+GarageQual
+GarageCond
+PavedDrive
+PoolQC
+Fence
+MiscFeature
+MoSold
+SaleType
+SaleCondition
+OverallQualXOverallCond
+ExterQualXExterCond
+BsmtQualXBsmtCond
+BsmtFinSF1XBsmtFinType1
+BsmtFinSF2XBsmtFinType2
+GarageQualXGarageCond
+HeatingXHeatingQC
+SaleTypeXSaleCondition
+NeighborhoodXBldgType
+MasVnrAreaXMasVnrType
+KitchenAbvGrXKitchenQual
+FireplacesXFireplaceQu
+GarageTypeXGarageQual
+GarageTypeXGarageCond
+LandContourXLandSlope
+Condition1XCondition2
+RoofStyleXRoofMatl
+
+
+
+Numeric:
+LotFrontage
+LotArea
+YearBuilt
+YearRemodAdd
+MasVnrArea
 BsmtFinSF1
 BsmtFinSF2
 BsmtUnfSF
@@ -515,16 +690,424 @@ HighQualFinSF
 OthrRmsAbvGrd
 OutdoorSF
 
-Alley, BsmtQual, BsmtCondition, BsmtExposure, BsmtFinType1, BsmtFinType2, FireplaceQu, GarageType, GarageFinish, GarageQual, GarageCond  = character
+
+
+```{r}
+
+## when training data on interaction featuress, make sure that some interaction feature exists in the test dataset. Sometimes there is't a map between 
+tr = ggplot(data = df_train)
+te = ggplot(data = df_test)
+
+grid.arrange(tr + geom_bar(aes(x=MSSubClass)), 
+             te + geom_bar(aes(x=MSSubClass)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=MSZoning)), 
+             te + geom_bar(aes(x=MSZoning)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Street)), 
+             te + geom_bar(aes(x=Street)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Alley)), 
+             te + geom_bar(aes(x=Alley)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LotShape)), 
+             te + geom_bar(aes(x=LotShape)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LandContour)), 
+             te + geom_bar(aes(x=LandContour)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LotConfig)), 
+             te + geom_bar(aes(x=LotConfig)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LandSlope)), 
+             te + geom_bar(aes(x=LandSlope)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Neighborhood)), 
+             te + geom_bar(aes(x=Neighborhood)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Condition1)), 
+             te + geom_bar(aes(x=Condition1)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Condition2)), 
+             te + geom_bar(aes(x=Condition2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BldgType)), 
+             te + geom_bar(aes(x=BldgType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=HouseStyle)), 
+             te + geom_bar(aes(x=HouseStyle)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=OverallQual)), 
+             te + geom_bar(aes(x=OverallQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=OverallCond)), 
+             te + geom_bar(aes(x=OverallCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=RoofStyle)), 
+             te + geom_bar(aes(x=RoofStyle)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=RoofMatl)), 
+             te + geom_bar(aes(x=RoofMatl)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Exterior1st)), 
+             te + geom_bar(aes(x=Exterior1st)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Exterior2nd)), 
+             te + geom_bar(aes(x=Exterior2nd)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=ExterCond)), 
+             te + geom_bar(aes(x=ExterCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=ExterQual)), 
+             te + geom_bar(aes(x=ExterQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Foundation)), 
+             te + geom_bar(aes(x=Foundation)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtQual)), 
+             te + geom_bar(aes(x=BsmtQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtCond)), 
+             te + geom_bar(aes(x=BsmtCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtExposure)), 
+             te + geom_bar(aes(x=BsmtExposure)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFinType1)), 
+             te + geom_bar(aes(x=BsmtFinType1)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFinType2)), 
+             te + geom_bar(aes(x=BsmtFinType2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Heating)), 
+             te + geom_bar(aes(x=Heating)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=HeatingQC)), 
+             te + geom_bar(aes(x=HeatingQC)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=CentralAir)), 
+             te + geom_bar(aes(x=CentralAir)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Electrical)), 
+             te + geom_bar(aes(x=Electrical)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFullBath)), 
+             te + geom_bar(aes(x=BsmtFullBath)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtHalfBath)), 
+             te + geom_bar(aes(x=BsmtHalfBath)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=FullBath)), 
+             te + geom_bar(aes(x=FullBath)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=HalfBath)), 
+             te + geom_bar(aes(x=HalfBath)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BedroomAbvGr)), 
+             te + geom_bar(aes(x=BedroomAbvGr)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=KitchenAbvGr)), 
+             te + geom_bar(aes(x=KitchenAbvGr)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=KitchenQual)), 
+             te + geom_bar(aes(x=KitchenQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Functional)), 
+             te + geom_bar(aes(x=Functional)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Fireplaces)), 
+             te + geom_bar(aes(x=Fireplaces)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=FireplaceQu)), 
+             te + geom_bar(aes(x=FireplaceQu)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageType)), 
+             te + geom_bar(aes(x=GarageType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageFinish)), 
+             te + geom_bar(aes(x=GarageFinish)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageCars)), 
+             te + geom_bar(aes(x=GarageCars)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageQual)), 
+             te + geom_bar(aes(x=GarageQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageCond)), 
+             te + geom_bar(aes(x=GarageCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=PavedDrive)), 
+             te + geom_bar(aes(x=PavedDrive)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=PoolQC)), 
+             te + geom_bar(aes(x=PoolQC)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Fence)), 
+             te + geom_bar(aes(x=Fence)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=MiscFeature)), 
+             te + geom_bar(aes(x=MiscFeature)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=MoSold)), 
+             te + geom_bar(aes(x=MoSold)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=SaleType)), 
+             te + geom_bar(aes(x=SaleType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=SaleCondition)), 
+             te + geom_bar(aes(x=SaleCondition)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=OverallQualXOverallCond)), 
+             te + geom_bar(aes(x=OverallQualXOverallCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=ExterQualXExterCond)), 
+             te + geom_bar(aes(x=ExterQualXExterCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtQualXBsmtCond)), 
+             te + geom_bar(aes(x=BsmtQualXBsmtCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFinSF1XBsmtFinType1)), 
+             te + geom_bar(aes(x=BsmtFinSF1XBsmtFinType1)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFinSF2XBsmtFinType2)), 
+             te + geom_bar(aes(x=BsmtFinSF2XBsmtFinType2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=HeatingXHeatingQC)), 
+             te + geom_bar(aes(x=HeatingXHeatingQC)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=SaleTypeXSaleCondition)), 
+             te + geom_bar(aes(x=SaleTypeXSaleCondition)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=NeighborhoodXBldgType)), 
+             te + geom_bar(aes(x=NeighborhoodXBldgType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=MasVnrAreaXMasVnrType)), 
+             te + geom_bar(aes(x=MasVnrAreaXMasVnrType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=KitchenAbvGrXKitchenQual)), 
+             te + geom_bar(aes(x=KitchenAbvGrXKitchenQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=FireplacesXFireplaceQu)), 
+             te + geom_bar(aes(x=FireplacesXFireplaceQu)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageTypeXGarageQual)), 
+             te + geom_bar(aes(x=GarageTypeXGarageQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageTypeXGarageCond)), 
+             te + geom_bar(aes(x=GarageTypeXGarageCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LandContourXLandSlope)), 
+             te + geom_bar(aes(x=LandContourXLandSlope)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Condition1XCondition2)), 
+             te + geom_bar(aes(x=Condition1XCondition2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=RoofStyleXRoofMatl)), 
+             te + geom_bar(aes(x=RoofStyleXRoofMatl)), 
+             ncol = 2)
 
 ```
 
 ```{r}
-df$train
+
+grid.arrange(tr + geom_histogram(aes(x=LotFrontage)), 
+             te + geom_histogram(aes(x=LotFrontage)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=LotArea)), 
+             te + geom_histogram(aes(x=LotArea)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=YearBuilt)), 
+             te + geom_histogram(aes(x=YearBuilt)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=YearRemodAdd)), 
+             te + geom_histogram(aes(x=YearRemodAdd)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=YearLastUpdated)), 
+             te + geom_histogram(aes(x=YearLastUpdated)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=MasVnrArea)), 
+             te + geom_histogram(aes(x=MasVnrArea)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=BsmtFinSF1)), 
+             te + geom_histogram(aes(x=BsmtFinSF1)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=BsmtFinSF2)), 
+             te + geom_histogram(aes(x=BsmtFinSF2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=BsmtUnfSF)), 
+             te + geom_histogram(aes(x=BsmtUnfSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=TotalBsmtSF)), 
+             te + geom_histogram(aes(x=TotalBsmtSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=X1stFlrSF)), 
+             te + geom_histogram(aes(x=X1stFlrSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=X2ndFlrSF)), 
+             te + geom_histogram(aes(x=X2ndFlrSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=LowQualFinSF)), 
+             te + geom_histogram(aes(x=LowQualFinSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=GrLivArea)), 
+             te + geom_histogram(aes(x=GrLivArea)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=TotRmsAbvGrd)), 
+             te + geom_histogram(aes(x=TotRmsAbvGrd)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=GarageYrBlt)), 
+             te + geom_histogram(aes(x=GarageYrBlt)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=GarageArea)), 
+             te + geom_histogram(aes(x=GarageArea)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=WoodDeckSF)), 
+             te + geom_histogram(aes(x=WoodDeckSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=OpenPorchSF)), 
+             te + geom_histogram(aes(x=OpenPorchSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=EnclosedPorch)), 
+             te + geom_histogram(aes(x=EnclosedPorch)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=X3SsnPorch)), 
+             te + geom_histogram(aes(x=X3SsnPorch)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=ScreenPorch)), 
+             te + geom_histogram(aes(x=ScreenPorch)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=PoolArea)), 
+             te + geom_histogram(aes(x=PoolArea)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=MiscVal)), 
+             te + geom_histogram(aes(x=MiscVal)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=YrSold)), 
+             te + geom_histogram(aes(x=YrSold)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=TotalBaths)), 
+             te + geom_histogram(aes(x=TotalBaths)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=TotalSF)), 
+             te + geom_histogram(aes(x=TotalSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=HighQualFinSF)), 
+             te + geom_histogram(aes(x=HighQualFinSF)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=OthrRmsAbvGrd)), 
+             te + geom_histogram(aes(x=OthrRmsAbvGrd)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=OutdoorSF)), 
+             te + geom_histogram(aes(x=OutdoorSF)), 
+             ncol = 2)
+
 ```
 
 ```{r}
-hist(df_train$LotFrontage)
+colMtx <- matrix(names(df_train)[1:length(df_train)-1], nrow = 6)
+for (i in 1:ncol(colMtx)) {
+  tableplot(df_train, 
+            select_string = c(colMtx[,i], "SalePrice"), 
+            sortCol = "SalePrice", decreasing = TRUE, 
+            nBins = 30)
+}
 ```
 
 
@@ -544,11 +1127,12 @@ ggplot(response_variable, aes(x = response_variable)) +
 hist(response_variable)
 hist(log(response_variable))
 
+
+sapply(df_train, function(x) sum(is.nan(x)))
 ```
 
 
 
-## Data Transformations
 
 
 ```{r}
