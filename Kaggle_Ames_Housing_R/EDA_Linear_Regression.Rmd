@@ -22,7 +22,12 @@ library(corrplot)
 library(car)
 library(glmnet)
 library(gridExtra)
-library(tabplot)
+library(data.table)
+library(pls)
+library(tree)
+library(randomForest)
+library(glm2)
+#library(tabplot)
 ```
 
 ## Step 1: Understanding the Problem:
@@ -31,6 +36,22 @@ We are asked to predict house prices in Ames, Iowa based on 79 explanatory varia
 
 
 Even before looking at the data, my intuition is that multivariate linear regression techniques may be a good way to approach this problem, because the price of a house seems to depend on several factors added together, but that we wil have to pay special attention to feature selection in order to reduce the variance of our model, feature engineering. Also, response variable is numeric. 
+
+Strategy: create several models of various types, identify the well-performing and uncorrelated ones, and then ensemble. 
+
+Feed 'clean' features into the models and let them decide which ones to use:
+
+Multiple linear regressions
+Use AIC / BIC to decide which and how many features to include. Make sure features selected are relatively uncorrelated.
+
+Ridge / Lasso / Elasticnet
+
+Random Forests
+
+Screen models according to threshold of cv performance score (threshold doesn't actually have to be that high, especially if model results are not correlated with the others)
+
+Select models for ensembling based on 'greedy' method: find two least-correlated ones. Find next model least correlated with these, etc, etc - unti you reach some threshold of correlation. 
+
 
 
 ```{r import data}
@@ -46,6 +67,8 @@ df_test <- read.csv("test.csv",
 
 ```
 
+
+
 ```{r drop Id and SalePrice}
 
 # Save ID column
@@ -56,17 +79,178 @@ test_Id = df_test$Id
 df_train = subset(df_train, select = -Id)
 df_test = subset(df_test, select = -Id)
 
-# Save SalePrice
+# Save SalePrice as response_variable
 response_variable = df_train$SalePrice
 
-# Drop SalePrice so we don't accidentally use it as feature (when doing MICE imputation, for example)
+# Drop SalePrice so we don't accidentally use it as feature (when doing MICE imputation, for example), and so we can unite dataframes
 df_train = subset(df_train, select = -SalePrice)
 
+# create a united train_test database
+df_united = rbind(df_train, df_test)
+
 # Drop Utilities - it cant be used as a predictor because all values in training dataset are 'AllPub' except one 'NoSeWa'. All values in test dataset are 'AllPub' except two 'NA'. With such little variation (possibly none in test, depending on imputation), there is no predictive value
-df_train = subset(df_train, select = -Utilities)
-df_test = subset(df_test, select = -Utilities)
+df_united = subset(df_united, select = -Utilities)
 ```
 
+
+
+
+Looks like we need to change some of these classes!
+
+I want to make sure anything that tells us about the *type* of something is classified as a 'factor', and anything that tells us the *amount* of something is classified as an 'integer'. 
+
+It looks like everything that has already been classified as a factor is in the proper category, but several of the features have been incorrectly classified as integers.
+
+But, before doing that we are going to first derive some features because we are going to take advantage of some features (the ones measuring the number of bathrooms, bedrooms and kitchens), being initially classified as integers. I  provide an argument for why these features should really be classified as factors, below.
+
+Derived Features:
+
+We can derive:
+OthrRmsAbvGr = TotalRms - (KitchenAbvGr + BedroomAbvGr + Bathroom + HalfBath)
+Adding all baths
+Adding Square Footage
+Adjusting for High Quality / Low Quality
+
+Others:
+OutdoorSF = WoodDeckSF + OpenPorchSF + EnclosedPorch + 3SsnPorch + ScreenPorch
+
+
+
+The features classified as integers should measure an amount, not a type. Therefore, all the features that measure square or linear footage are properly labeled as an integers (`LotFrontage`, `LotArea`, etc). There are also two features that measure price, which is an amount, and so are correctly labeled: `SalePrice` (our response variable), and `MiscVal` (even though this feature is categorized correctly, it is problematic in other ways that I will discuss below). 
+
+There are a few unambiguous cases of features mis-labeled as integers:
+`MSSubClass` - identifies the type of dwelling, and so is clearly categorical
+`MoSold` - identifies the month sold (1-12), and so is clearly categorical
+`OverallQual` - rates the overall material and finish of the house (1-10). The rating assigns a type to the house quality, not an amount
+`OverallCond` - rates the overall condition of the house(1-10). Again, this assigns a type to the house condition, not an amount. 
+
+There are additional cases that (to me) are mis-labeled as integers:
+`BsmtFullBath`, `BsmtHalfBath`, `FullBath`, `HalfBath`, `BedroomAbvGr`, `KitchenAbvGr`, `TotRmsAbvGrd`, `Fireplaces`, `GarageCars`
+All the features listed above actually do measure the amount of things - bathrooms, bedrooms, kitchens, fireplaces, cars. So they have a case for being counted as integers. However, I would argue that, in the context of buying a house, they actually identify different types. I think, in the context of home value, a 2-bathroom house is a different type of house than a 3-bathroom house. Or, similarly, a 2-car garage is a different type than a 3-car garage. These features don't really measure a difference in degree, but type.
+To highlight the difference, I would argue that the squre footage features, correctly labeled as integers, do measure degree. A 2000 square foot house is different in degree from a 2500 square foot house, and each step along the continuum changes the degree. On the other hand, each additional bathroom changes the type of house from a 1-bathroom type, to a 2-bathroom type, etc.
+My argument works for most of the variables listed. I'm not confident it works for `TotalRoomsAbvGrd` or `Fireplaces` though. Once you're counting all the rooms, is a 7-room house different in type than a 8-room house? I'm not sure. And is a 1-fireplace house really different in type from a 2-fireplace house? Again, I'm not sure. As a compromise, I'll treat the total rooms value as an integer, but each of the specific rooms (Kitchen, Bath, Bedroom, Other) as factors. Similarly, I'll treat totalBaths as an iteger, but the specific full-bath and half-bath features as categorical. 
+
+(we will eventually change bathrooms to factors, but first we will do some feature engineering)
+
+There is a type of feature that isn't really an integer or a factor: the 'Year' features:
+     `YearBuilt`  `YearRemodAdd`  `GarageYrBlt` `YrSold`
+  
+
+
+
+       
+ 
+
+`MiscVal` is an especially interesting feature because it is the dolar value of a miscellaneous feature (specified under `MiscFeature`) not covered by the other features. This feature is in the same units, dollars, as the response variable and is specifically supposed to capture value not captured by those features. 
+Because of this, it may be possible to train our model using all the features except `MiscFeature` and `MiscVal` and the response variable `SalePrice - MiscVal`, and then add the values from `MiscVal` back into the results before giving the predicted `SalePrice`. 
+
+
+```{r some interactions}
+# take advantage of unconverted classes to do some interactions
+
+
+qual_to_int = function(x){
+  if(!(is.na(x))){
+    if(x == 'Po'){
+      x = 1
+    } else if(x == 'Fa'){
+      x = 2
+    } else if(x == 'TA'){
+      x = 3
+    } else if(x == 'Gd'){
+      x = 4
+    } else if(x == 'Ex'){
+      x = 5
+    } 
+  } else{
+      x = 0
+  }
+}
+
+convert_quals = function(df){
+  df$ExterQual = unlist(map(df$ExterQual, ~ qual_to_int(.)))
+  df$ExterCond = unlist(map(df$ExterCond, ~ qual_to_int(.)))
+  df$BsmtQual = unlist(map(df$BsmtQual, ~ qual_to_int(.)))
+  df$BsmtCond = unlist(map(df$BsmtCond, ~ qual_to_int(.)))
+  df$GarageQual = unlist(map(df$GarageQual, ~ qual_to_int(.)))
+  df$GarageCond = unlist(map(df$GarageCond, ~ qual_to_int(.)))
+  df$KitchenQual = unlist(map(df$KitchenQual, ~ qual_to_int(.)))
+  df$FireplaceQu = unlist(map(df$FireplaceQu, ~ qual_to_int(.)))
+  df$PoolQC = unlist(map(df$PoolQC, ~ qual_to_int(.)))
+  
+  # df$ExterQual = unlist(df$ExterQual)
+  # df$ExterCond = unlist(df$ExterCond)
+  # df$BsmtQual = unlist(df$BsmtQual)
+  # df$ExterQual = unlist(df$ExterQual)
+  # df$ExterQual = unlist(df$ExterQual)
+  # df$ExterQual = unlist(df$ExterQual)
+  # df$ExterQual = unlist(df$ExterQual)
+  # df$ExterQual = unlist(df$ExterQual)
+  # df$ExterQual = unlist(df$ExterQual)
+  # df$ExterQual = unlist(df$ExterQual)
+
+  
+  return(df)
+}
+
+ df_united = convert_quals(df_united)
+
+#
+# interaction_quals = c('ExterQual', 'ExterCond', 'BsmtQual', 'BsmtCond', 'GarageQual', 'GarageCond', 'KitchenQual', 'FireplaceQu', 'PoolQC')
+
+```
+
+
+
+```{r}
+get_interaction_features = function(df){
+ df = df %>%
+   mutate(OverallQualXOverallCond = OverallQual * OverallCond,
+          ExterQualXExterCond = ExterQual * ExterCond,
+          BsmtQualXBsmtCond = BsmtQual * BsmtCond,
+          GarageQualXGarageCond = GarageQual * GarageCond,
+          KitchenAbvGrXKitchenQual = KitchenAbvGr * KitchenQual,
+          FireplacesXFireplaceQu = Fireplaces * FireplaceQu,
+          PoolAreaXPoolQC = PoolArea * PoolQC)
+}
+
+df_united_no_interactions = df_united
+df_united = get_interaction_features(df_united)
+
+```
+
+
+```{r convert class}
+
+convert_classes = function(df){
+  df$MSSubClass = as.factor(df$MSSubClass)
+  df$MoSold = as.factor(df$MoSold)
+  df$OverallQual = as.factor(df$OverallQual)
+  df$OverallCond = as.factor(df$OverallCond)
+  df$ExterQual = as.factor(df$ExterQual)
+  df$ExterCond = as.factor(df$ExterCond)
+  df$BsmtQual = as.factor(df$BsmtQual)
+  df$BsmtCond = as.factor(df$BsmtCond)
+  df$GarageCond = as.factor(df$GarageCond)
+  df$KitchenQual = as.factor(df$KitchenQual)
+  df$FireplaceQu = as.factor(df$FireplaceQu)
+  df$PoolQC = as.factor(df$PoolQC)
+
+  # # only do these after deriving features
+  # df$BsmtFullBath = as.factor(df$BsmtFullBath)
+  # df$BsmtHalfBath = as.factor(df$BsmtHalfBath)
+  # df$FullBath = as.factor(df$FullBath)
+  # df$HalfBath = as.factor(df$HalfBath)
+  # df$BedroomAbvGr = as.factor(df$BedroomAbvGr)
+  # df$KitchenAbvGr = as.factor(df$KitchenAbvGr)
+  # df$Fireplaces = as.factor(df$Fireplaces)
+  # df$GarageCars = as.factor(df$GarageCars)
+  return(df)
+}
+df_united_unconverted = df_united
+df_united = convert_classes(df_united)
+
+```
 
 
 Missing Values
@@ -99,6 +283,12 @@ Features	LotFrontage
 
 For LotFrontage, we needed to impute a value because it does not make sense that a house is actually missing the attribute. Instead of imputing the median value for the entire dataset, we decided to impute the median for the neighborhood the house is located in to give us a more accurate estimate
 
+```{r}
+# check for missing values
+sapply(df_united, function(x) sum(is.na(x)))
+```
+
+
 
 
 ```{r flag as none}
@@ -106,56 +296,63 @@ For LotFrontage, we needed to impute a value because it does not make sense that
 # Flag as None
 #	Alley, BsmtCond, BsmtQual, BsmtExposure, BsmtFinType1, BsmtFinType2, Fence, FireplaceQu, GarageCond, GarageFinish, GarageQual, GarageType, MiscFeature, PoolQC
 
-# check missing values
-sapply(df_train, function(x) sum(is.na(x)))
-sapply(df_test, function(x) sum(is.na(x)))
-
 flag_as_none = function(df) {
   df = df %>%
-    mutate(Alley = ifelse(is.na(Alley), 'None', levels(Alley)),
-           BsmtCond = ifelse(is.na(BsmtCond), 'None', levels(BsmtCond)),
-           BsmtQual = ifelse(is.na(BsmtQual), 'None', levels(BsmtQual)),
+    mutate(Alley = ifelse(is.na(Alley), 'None', Alley),
            BsmtExposure = 
-             ifelse(is.na(BsmtExposure), 'None', levels(BsmtExposure)),
+             ifelse(is.na(BsmtExposure), 'None', BsmtExposure),
            BsmtFinType1 = 
-             ifelse(is.na(BsmtFinType1), 'None', levels(BsmtFinType1)),
+             ifelse(is.na(BsmtFinType1), 'None', BsmtFinType1),
            BsmtFinType2 = 
-             ifelse(is.na(BsmtFinType2), 'None', levels(BsmtFinType2)),
-           Fence = ifelse(is.na(Fence), 'None', levels(Fence)),
-           FireplaceQu = 
-             ifelse(is.na(FireplaceQu), 'None', levels(FireplaceQu)),
-           GarageCond = 
-             ifelse(is.na(GarageCond), 'None', levels(GarageCond)),
+             ifelse(is.na(BsmtFinType2), 'None', BsmtFinType2),
+           Fence = ifelse(is.na(Fence), 'None', Fence),
            GarageFinish = 
-             ifelse(is.na(GarageFinish), 'None', levels(GarageFinish)),
-           GarageQual = 
-             ifelse(is.na(GarageQual), 'None', levels(GarageQual)),
+             ifelse(is.na(GarageFinish), 'None', GarageFinish),
            GarageType = 
-             ifelse(is.na(GarageType), 'None', levels(GarageType)),
+             ifelse(is.na(GarageType), 'None', GarageType),
            MiscFeature = 
-             ifelse(is.na(MiscFeature), 'None', levels(MiscFeature)),
-           PoolQC = ifelse(is.na(PoolQC), 'None', levels(PoolQC))
+             ifelse(is.na(MiscFeature), 'None', MiscFeature)
            )
+  
   df$Alley = as.factor(df$Alley)
-  df$BsmtCond = as.factor(df$BsmtCond)
-  df$BsmtQual = as.factor(df$BsmtQual)
   df$BsmtExposure = as.factor(df$BsmtExposure)
   df$BsmtFinType1 = as.factor(df$BsmtFinType1)
   df$BsmtFinType2 = as.factor(df$BsmtFinType2)
   df$Fence = as.factor(df$Fence)
-  df$FireplaceQu = as.factor(df$FireplaceQu)
-  df$FireplaceQu = as.factor(df$FireplaceQu)
-  df$GarageCond = as.factor(df$GarageCond)
   df$GarageFinish = as.factor(df$GarageFinish)
-  df$GarageQual = as.factor(df$GarageQual)
   df$GarageType = as.factor(df$GarageType)
   df$MiscFeature = as.factor(df$MiscFeature)
-  df$PoolQC = as.factor(df$PoolQC)
-  
+
   return(df)
 }
-df_train = flag_as_none(df_train)
-df_test = flag_as_none(df_test)
+
+df_united = flag_as_none(df_united)
+```
+
+
+There's two features that measure the same thing: Condiion1 and Condition2. Seems that we should really have a feature that counts how many times a condition occurs in either column. So, let's create one.
+
+We're essentially doing some custom dummification of a new 'Condition' variable that is a combination of Condition1 and Condition2. 
+
+After creating it, we can remove the original Condition1 and Condition2 features. 
+
+```{r dummify Condition1 and Conditon2}
+
+df_united = df_united %>%
+  mutate(Artery = (Condition1 == 'Artery') + (Condition2 == 'Artery'),
+         Feedr = (Condition1 == 'Feedr') + (Condition2 == 'Feedr'),
+         Norm = (Condition1 == 'Norm') + (Condition2 == 'Norm'),
+         PosA = (Condition1 == 'PosA') + (Condition2 == 'PosA'),
+         PosN = (Condition1 == 'PosN') + (Condition2 == 'PosN'),
+         RRAe = (Condition1 == 'RRAe') + (Condition2 == 'RRAe'),
+         RRAn = (Condition1 == 'RRAn') + (Condition2 == 'RRAn'),
+         RRNe = (Condition1 == 'RRNe') + (Condition2 == 'RRNe'),
+         RRNn = (Condition1 == 'RRNn') + (Condition2 == 'RRNn')
+         )
+
+df_united = subset(df_united, select = -c(Condition1, Condition2))
+
+
 ```
 
 
@@ -174,8 +371,8 @@ impute_zero = function(df){
           )
 }
 
-df_train = impute_zero(df_train)
-df_test = impute_zero(df_test)
+df_united = impute_zero(df_united)
+
 ```
 
 
@@ -195,138 +392,126 @@ Functional
 SaleType
 
 
+Since our missing variables are factors, we can impute them using MICE:
 
 ```{r impute values using MICE}
 
+# Separate data into train and test again, since we will be applying a model to the data and don't want to use data from train dataset to impute test values
+
+df_train = df_united[1:1460, ]
+df_test = df_united[1461:2919, ]
+
 # impute using MICE
+train_imputed_mids = mice(df_train, m = 1, method = 'pmm') # needed to change method from default
+test_imputed_mids = mice(df_test, m = 1, method = 'pmm') # needed to change method from default
 
-train_imputed = mice(df_train, m = 1, method = 'cart') # needed to change method from default
-test_imputed = mice(df_test, m = 1, method = 'cart') # needed to change method from default
-
-# check if data that was imputed is plausible
-# LotFrontage
-hist(train_imputed$imp$LotFrontage[[1]])
-hist(df_train$LotFrontage)
-
-hist(test_imputed$imp$LotFrontage[[1]])
-hist(df_test$LotFrontage)
-
-# MasVnrArea
-hist(train_imputed$imp$MasVnrArea[[1]])
-hist(df_train$MasVnrArea)
-
-hist(test_imputed$imp$MasVnrArea[[1]])
-hist(df_test$MasVnrArea)
+## check if data that was imputed is plausible
+# Density Plots for numerical values: LotFrontage and MasVnrArea
+densityplot(train_imputed_mids)
+densityplot(test_imputed_mids)
 
 # Electrical
-barchart(train_imputed$imp$Electrical[[1]])
-barchart(df_train$Electrical)
-
-barchart(test_imputed$imp$Electrical[[1]])
-barchart(df_test$Electrical)
+grid.arrange(barchart(train_imputed_mids$imp$Electrical[[1]], main = 'Imputed Train'),
+             barchart(df_train$Electrical, main = 'Train'), 
+             barchart(test_imputed_mids$imp$Electrical[[1]], main = 'Imputed Test'),
+             barchart(df_test$Electrical, main = 'Test'), 
+             ncol = 4,
+             top = 'Electrical')
 
 # MasVnrType
-barchart(train_imputed$imp$MasVnrType[[1]])
-barchart(df_train$MasVnrType)
-
-barchart(test_imputed$imp$MasVnrType[[1]])
-barchart(df_test$MasVnrType)
+grid.arrange(barchart(train_imputed_mids$imp$MasVnrType[[1]], main = 'Imputed Train'),
+             barchart(df_train$MasVnrType, main = 'Train'), 
+             barchart(test_imputed_mids$imp$MasVnrType[[1]], main = 'Imputed Test'),
+             barchart(df_test$MasVnrType, main = 'Test'), 
+             ncol = 4,
+             top = 'MasVnrType')
 
 # MSZoning
-barchart(train_imputed$imp$MSZoning[[1]])
-barchart(df_train$MSZoning)
+grid.arrange(barchart(train_imputed_mids$imp$MSZoning[[1]], main = 'Imputed Train'),
+             barchart(df_train$MSZoning, main = 'Train'), 
+             barchart(test_imputed_mids$imp$MSZoning[[1]], main = 'Imputed Test'),
+             barchart(df_test$MSZoning, main = 'Test'), 
+             ncol = 4,
+             top = 'MSZoning')
 
-barchart(test_imputed$imp$MSZoning[[1]])
-barchart(df_test$MSZoning)
 
 # Exterior1st
-barchart(train_imputed$imp$Exterior1st[[1]])
-barchart(df_train$Exterior1st)
-
-barchart(test_imputed$imp$Exterior1st[[1]])
-barchart(df_test$Exterior1st)
+grid.arrange(barchart(train_imputed_mids$imp$Exterior1st[[1]], main = 'Imputed Train'),
+             barchart(df_train$Exterior1st, main = 'Train'), 
+             barchart(test_imputed_mids$imp$Exterior1st[[1]], main = 'Imputed Test'),
+             barchart(df_test$Exterior1st, main = 'Test'), 
+             ncol = 4,
+             top = 'Exterior1st')
 
 # Exterior2nd
-barchart(train_imputed$imp$Exterior2nd[[1]])
-barchart(df_train$Exterior2nd)
-
-barchart(test_imputed$imp$Exterior2nd[[1]])
-barchart(df_test$Exterior2nd)
+grid.arrange(barchart(train_imputed_mids$imp$Exterior2nd[[1]], main = 'Imputed Train'),
+             barchart(df_train$Exterior2nd, main = 'Train'), 
+             barchart(test_imputed_mids$imp$Exterior2nd[[1]], main = 'Imputed Test'),
+             barchart(df_test$Exterior2nd, main = 'Test'), 
+             ncol = 4,
+             top = 'Exterior2nd')
 
 # KitchenQual
-barchart(train_imputed$imp$KitchenQual[[1]])
-barchart(df_train$KitchenQual)
+grid.arrange(barchart(train_imputed_mids$imp$KitchenQual[[1]], main = 'Imputed Train'),
+             barchart(df_train$KitchenQual, main = 'Train'), 
+             barchart(test_imputed_mids$imp$KitchenQual[[1]], main = 'Imputed Test'),
+             barchart(df_test$KitchenQual, main = 'Test'), 
+             ncol = 4,
+             top = 'KitchenQual')
 
-barchart(test_imputed$imp$KitchenQual[[1]])
-barchart(df_test$KitchenQual)
 
 # Functional
-barchart(train_imputed$imp$Functional[[1]])
-barchart(df_train$Functional)
-
-barchart(test_imputed$imp$Functional[[1]])
-barchart(df_test$Functional)
+grid.arrange(barchart(train_imputed_mids$imp$Functional[[1]], main = 'Imputed Train'),
+             barchart(df_train$Functional, main = 'Train'), 
+             barchart(test_imputed_mids$imp$Functional[[1]], main = 'Imputed Test'),
+             barchart(df_test$Functional, main = 'Test'), 
+             ncol = 4,
+             top = 'Functional')
 
 # SaleType
-barchart(train_imputed$imp$SaleType[[1]])
-barchart(df_train$SaleType)
+grid.arrange(barchart(train_imputed_mids$imp$SaleType[[1]], main = 'Imputed Train'),
+             barchart(df_train$SaleType, main = 'Train'), 
+             barchart(test_imputed_mids$imp$SaleType[[1]], main = 'Imputed Test'),
+             barchart(df_test$SaleType, main = 'Test'), 
+             ncol = 4,
+             top = 'SaleType')
 
-barchart(test_imputed$imp$SaleType[[1]])
-barchart(df_test$SaleType)
 
-# Density Plots of imputed vs. non-imputed data (for numerical values)
-densityplot(train_imputed)
-densityplot(test_imputed)
+# update data table
+df_train = complete(train_imputed_mids, 1)
+df_test = complete(test_imputed_mids, 1)
 
-# update data tables
-df_train = complete(train_imputed, 1)
-df_test = complete(test_imputed, 1)
+# re-united data tables
+df_united = rbind(df_train, df_test)
 
 ```
+
 ```{r}
-sapply(df_test, function(x) sum(is.na(x)))
+# any more missing values?
+sapply(df_united, function(x) sum(is.na(x)))
 ```
 
-Let's check if they were imported as the right classes
+Let's check if data are in the right classes
 
 ```{r check class}
-map_chr(df_train, class)
-map_chr(df_test, class)
+map_chr(df_united, class)
 ```
-Looks like we need to change some of these classes!
 
-I want to make sure anything that tells us about the *type* of something is classified as a 'factor', and anything that tells us the *amount* of something is classified as an 'integer'. 
-
-It looks like everything that has already been classified as a factor is in the proper category, but several of the features have been incorrectly classified as integers.
-
-But, before doing that we are going to first derive some features because we are going to take advantage of some features (the ones measuring the number of bathrooms, bedrooms and kitchens), being initially classified as integers. I  provide an argument for why these features should really be classified as factors, below.
-
-Derived Features:
-
-We can derive:
-OthrRmsAbvGr = TotalRms - (KitchenAbvGr + BedroomAbvGr + Bathroom + HalfBath)
-Adding all baths
-Adding Square Footage
-Adjusting for High Quality / Low Quality
-
-Others:
-OutdoorSF = WoodDeckSF + OpenPorchSF + EnclosedPorch + 3SsnPorch + ScreenPorch
 
 ```{r derived features}
-# wrap it in a function so we can easily change df_test in the same way
 
 get_derived_features = function(df){
  df = df %>%
    mutate(TotalBaths = 
-            as.numeric(BsmtFullBath) + (as.numeric(BsmtHalfBath) * .5) + 
-            as.numeric(FullBath) + (as.numeric(HalfBath) * .5),
+            BsmtFullBath + (BsmtHalfBath * .5) + 
+            FullBath + (HalfBath * .5),
           TotalSF = 
             TotalBsmtSF + GrLivArea,
           HighQualFinSF = 
             TotalSF - LowQualFinSF,
           OthrRmsAbvGrd = 
             TotRmsAbvGrd -
-            (as.numeric(KitchenAbvGr) + as.numeric(BedroomAbvGr)),
+            (KitchenAbvGr + BedroomAbvGr),
           OutdoorSF =
             (WoodDeckSF + OpenPorchSF + EnclosedPorch + X3SsnPorch + ScreenPorch),
           # Min date for YearRemodAdd = 1950. We do not have info about homes remodeled
@@ -335,68 +520,12 @@ get_derived_features = function(df){
             ifelse(YearRemodAdd > 1950, YearRemodAdd, YearBuilt)
           )
 }
-df_train = get_derived_features(df_train)
-df_test = get_derived_features(df_test)
+
+df_united_no_derived = df_united
+df_united = get_derived_features(df_united)
+
 ```
 
-
-
-
-
-The features classified as integers should measure an amount, not a type. Therefore, all the features that measure square or linear footage are properly labeled as an integers (`LotFrontage`, `LotArea`, etc). There are also two features that measure price, which is an amount, and so are correctly labeled: `SalePrice` (our response variable), and `MiscVal` (even though this feature is categorized correctly, it is problematic in other ways that I will discuss below). 
-
-There are a few unambiguous cases of features mis-labeled as integers:
-`MSSubclass` - identifies the type of dwelling, and so is clearly categorical
-`MoSold` - identifies the month sold (1-12), and so is clearly categorical
-`OverallQual` - rates the overall material and finish of the house (1-10). The rating assigns a type to the house quality, not an amount
-`OverallCond` - rates the overall condition of the house(1-10). Again, this assigns a type to the house condition, not an amount. 
-
-There are additional cases that (to me) are mis-labeled as integers:
-`BsmtFullBath`, `BsmtHalfBath`, `FullBath`, `HalfBath`, `BedroomAbvGr`, `KitchenAbvGr`, `TotRmsAbvGrd`, `Fireplaces`, `GarageCars`
-All the features listed above actually do measure the amount of things - bathrooms, bedrooms, kitchens, fireplaces, cars. So they have a case for being counted as integers. However, I would argue that, in the context of buying a house, they actually identify different types. I think, in the context of home value, a 2-bathroom house is a different type of house than a 3-bathroom house. Or, similarly, a 2-car garage is a different type than a 3-car garage. These features don't really measure a difference in degree, but type.
-To highlight the difference, I would argue that the squre footage features, correctly labeled as integers, do measure degree. A 2000 square foot house is different in degree from a 2500 square foot house, and each step along the continuum changes the degree. On the other hand, each additional bathroom changes the type of house from a 1-bathroom type, to a 2-bathroom type, etc.
-My argument works for most of the variables listed. I'm not confident it works for `TotalRoomsAbvGrd` or `Fireplaces` though. Once you're counting all the rooms, is a 7-room house different in type than a 8-room house? I'm not sure. And is a 1-fireplace house really different in type from a 2-fireplace house? Again, I'm not sure. As a compromise, I'll treat the total rooms value as an integer, but each of the specific rooms (Kitchen, Bath, Bedroom, Other) as factors. Similarly, I'll treat totalBaths as an iteger, but the specific full-bath and half-bath features as categorical. 
-
-(we will eventually change bathrooms to factors, but first we will do some feature engineering)
-
-There is a type of feature that isn't really an integer or a factor: the 'Year' features:
-     `YearBuilt`  `YearRemodAdd`  `GarageYrBlt` `YrSold`
-  
-
-
-
-       
- 
-
-`MiscVal` is an especially interesting feature because it is the dolar value of a miscellaneous feature (specified under `MiscFeature`) not covered by the other features. This feature is in the same units, dollars, as the response variable and is specifically supposed to capture value not captured by those features. 
-Because of this, it may be possible to train our model using all the features except `MiscFeature` and `MiscVal` and the response variable `SalePrice - MiscVal`, and then add the values from `MiscVal` back into the results before giving the predicted `SalePrice`. 
-
-
-
-
-```{r convert class}
-
-convert_classes = function(df){
-  df$MSSubClass = as.factor(df$MSSubClass)
-  df$MoSold = as.factor(df$MoSold)
-  df$OverallQual = as.factor(df$OverallQual)
-  df$OverallCond = as.factor(df$OverallCond)
-
-  # only do these after deriving features
-  df$BsmtFullBath = as.factor(df$BsmtFullBath)
-  df$BsmtHalfBath = as.factor(df$BsmtHalfBath)
-  df$FullBath = as.factor(df$FullBath)
-  df$HalfBath = as.factor(df$HalfBath)
-  df$BedroomAbvGr = as.factor(df$BedroomAbvGr)
-  df$KitchenAbvGr = as.factor(df$KitchenAbvGr)
-  df$Fireplaces = as.factor(df$Fireplaces)
-  df$GarageCars = as.factor(df$GarageCars)
-  return(df)
-}
-
-df_train = convert_classes(df_train)
-df_test = convert_classes(df_test)
-```
 
 
 
@@ -411,94 +540,90 @@ GarageType * GarageQual
 GarageQual * GarageCond
 GarageType * GarageCond
 LandContour * LandSlope
-Condition1 * Condition2 
+Condition1 * Condition2
+
+```{r}
+levels(df_united$BsmtCond)
+```
+
 
 ```{r feature interactions}
-# feature interactions
-# OverallQuality*OverallCond	
-# ExterQual*ExterCond
-# BsmtQual*BsmtCond	GarageQual*GarageCond
-# Heating*HeatingQC	SaleType*SaleCondition
-# Neighborhood*BldgType
-hist(df_train$MasVnrArea[df_train$MasVnrArea > 0])
-hist(df_test$MasVnrArea[df_test$MasVnrArea > 0])
 
-#Divide BsmtFinSF1
-BsmtFinSF1_cut = cut2(df_test$BsmtFinSF1) 
-levels(BsmtFinSF1_cut) = c(seq(1:8))
+# #Divide BsmtFinSF1
+# BsmtFinSF1_cut = cut2(df_united$BsmtFinSF1) 
+# levels(BsmtFinSF1_cut) = c(seq(1:length(levels(BsmtFinSF1_cut)))) # change levels to something easier to read in dataframe
+# 
+# #Divide BsmtFinSF2
+# BsmtFinSF2_cut = cut2(df_united$BsmtFinSF2) 
+# levels(BsmtFinSF2_cut) = c(seq(1:length(levels(BsmtFinSF2_cut))))
+# 
+# 
+# # Divide MasVnrArea into bins
+# MasVnrArea_cut = cut2(df_united$MasVnrArea) 
+# levels(MasVnrArea_cut) = c(seq(1:length(levels(MasVnrArea_cut))))
 
-#Divide BsmtFinSF2
-BsmtFinSF2_cut = cut2(df_test$BsmtFinSF2) 
-levels(BsmtFinSF2_cut) = c(seq(1:3))
+# get_interaction_features = function(df){
+#  df = df %>%
+#    mutate(OverallQualXOverallCond = as.numeric(OverallQual) * as.numeric(OverallCond),
+#           ExterQualXExterCond = 
+#             paste(ExterQual, '*', ExterCond, sep = ''),
+#           BsmtQualXBsmtCond = 
+#             paste(BsmtQual, '*', BsmtCond, sep = ''),
+#           BsmtFinSF1XBsmtFinType1 = 
+#             paste(BsmtFinSF1_cut, '*', BsmtFinType1, sep = ''),
+#           BsmtFinSF2XBsmtFinType2 = 
+#             paste(BsmtFinSF2_cut, '*', BsmtFinType2, sep = ''),
+#           GarageQualXGarageCond = 
+#             paste(GarageQual, '*', GarageCond, sep = ''),
+#           HeatingXHeatingQC = 
+#             paste(Heating, '*', HeatingQC, sep = ''),
+#           SaleTypeXSaleCondition = 
+#             paste(SaleType, '*', SaleCondition, sep = ''),
+#           NeighborhoodXBldgType = 
+#             paste(Neighborhood, '*', BldgType, sep = ''),
+#           MasVnrAreaXMasVnrType = 
+#             paste(MasVnrArea_cut, '*', MasVnrType, sep = ''),
+#           KitchenAbvGrXKitchenQual = 
+#             paste(KitchenAbvGr, '*', KitchenQual, sep = ''),
+#           FireplacesXFireplaceQu = 
+#             paste(Fireplaces, '*', FireplaceQu, sep = ''),
+#           GarageTypeXGarageQual = 
+#             paste(GarageType, '*', GarageQual, sep = ''),
+#           GarageTypeXGarageCond = 
+#             paste(GarageType, '*', GarageCond, sep = ''),
+#           GarageQualXGarageCond = 
+#             paste(GarageQual, '*', GarageCond, sep = ''),
+#           LandContourXLandSlope = 
+#             paste(LandContour, '*', LandSlope, sep = ''),
+#           RoofStyleXRoofMatl = 
+#             paste(RoofStyle, '*', RoofMatl, sep = '')
+#           )
+#  
+# # convert classes to factor
+#  df$OverallQualXOverallCond = as.factor(df$OverallQualXOverallCond)
+#  df$ExterQualXExterCond = as.factor(df$ExterQualXExterCond)
+#  df$BsmtQualXBsmtCond = as.factor(df$BsmtQualXBsmtCond)
+#  df$BsmtFinSF1XBsmtFinType1 = as.factor(df$BsmtFinSF1XBsmtFinType1)
+#  df$BsmtFinSF2XBsmtFinType2 = as.factor(df$BsmtFinSF2XBsmtFinType2)
+#  df$GarageQualXGarageCond = as.factor(df$GarageQualXGarageCond)
+#  df$HeatingXHeatingQC = as.factor(df$HeatingXHeatingQC)
+#  df$SaleTypeXSaleCondition = as.factor(df$SaleTypeXSaleCondition)
+#  df$NeighborhoodXBldgType = as.factor(df$NeighborhoodXBldgType)
+#  df$MasVnrAreaXMasVnrType = as.factor(df$MasVnrAreaXMasVnrType)
+#  df$KitchenAbvGrXKitchenQual = as.factor(df$KitchenAbvGrXKitchenQual)
+#  df$FireplacesXFireplaceQu = as.factor(df$FireplacesXFireplaceQu)
+#  df$GarageTypeXGarageQual = as.factor(df$GarageTypeXGarageQual)
+#  df$GarageTypeXGarageCond = as.factor(df$GarageTypeXGarageCond)
+#  df$GarageQualXGarageCond = as.factor(df$GarageQualXGarageCond)
+#  df$LandContourXLandSlope = as.factor(df$LandContourXLandSlope)
+#  df$RoofStyleXRoofMatl = as.factor(df$RoofStyleXRoofMatl)
+# 
+#  return(df)
+# }
+# 
+# df_united_no_interactions = df_united
+# df_united = get_interaction_features(df_united)
 
-# Divide MasVnrArea into bins
-MasVnrArea_cut = cut2(df_test$MasVnrArea) 
-levels(MasVnrArea_cut) = c(seq(1:5)) # change levels to something easier to print
-
-get_interaction_features = function(df){
- df = df %>%
-   mutate(OverallQualXOverallCond = 
-            paste(OverallQual, '*', OverallCond, sep = ''),
-          ExterQualXExterCond = 
-            paste(ExterQual, '*', ExterCond, sep = ''),
-          BsmtQualXBsmtCond = 
-            paste(BsmtQual, '*', BsmtCond, sep = ''),
-          BsmtFinSF1XBsmtFinType1 = 
-            paste(BsmtFinSF1_cut, '*', BsmtFinType1, sep = ''),
-          BsmtFinSF2XBsmtFinType2 = 
-            paste(BsmtFinSF2_cut, '*', BsmtFinType2, sep = ''),
-          GarageQualXGarageCond = 
-            paste(GarageQual, '*', GarageCond, sep = ''),
-          HeatingXHeatingQC = 
-            paste(Heating, '*', HeatingQC, sep = ''),
-          SaleTypeXSaleCondition = 
-            paste(SaleType, '*', SaleCondition, sep = ''),
-          NeighborhoodXBldgType = 
-            paste(Neighborhood, '*', BldgType, sep = ''),
-          MasVnrAreaXMasVnrType = 
-            paste(MasVnrArea_cut, '*', MasVnrType, sep = ''),
-          KitchenAbvGrXKitchenQual = 
-            paste(KitchenAbvGr, '*', KitchenQual, sep = ''),
-          FireplacesXFireplaceQu = 
-            paste(Fireplaces, '*', FireplaceQu, sep = ''),
-          GarageTypeXGarageQual = 
-            paste(GarageType, '*', GarageQual, sep = ''),
-          GarageTypeXGarageCond = 
-            paste(GarageType, '*', GarageCond, sep = ''),
-          GarageQualXGarageCond = 
-            paste(GarageQual, '*', GarageCond, sep = ''),
-          LandContourXLandSlope = 
-            paste(LandContour, '*', LandSlope, sep = ''),
-          Condition1XCondition2 = 
-            paste(Condition1, '*', Condition2, sep = ''),
-          RoofStyleXRoofMatl = 
-            paste(RoofStyle, '*', RoofMatl, sep = '')
-          )
- 
- # convert classes to factor
- df$OverallQualXOverallCond = as.factor(df$OverallQualXOverallCond)
- df$ExterQualXExterCond = as.factor(df$ExterQualXExterCond)
- df$BsmtQualXBsmtCond = as.factor(df$BsmtQualXBsmtCond)
- df$BsmtFinSF1XBsmtFinType1 = as.factor(df$BsmtFinSF1XBsmtFinType1)
- df$BsmtFinSF2XBsmtFinType2 = as.factor(df$BsmtFinSF2XBsmtFinType2)
- df$GarageQualXGarageCond = as.factor(df$GarageQualXGarageCond)
- df$HeatingXHeatingQC = as.factor(df$HeatingXHeatingQC)
- df$NeighborhoodXBldgType = as.factor(df$NeighborhoodXBldgType)
- df$MasVnrAreaXMasVnrType = as.factor(df$MasVnrAreaXMasVnrType)
- df$KitchenAbvGrXKitchenQual = as.factor(df$KitchenAbvGrXKitchenQual)
- df$FireplacesXFireplaceQu = as.factor(df$FireplacesXFireplaceQu)
- df$GarageTypeXGarageQual = as.factor(df$GarageTypeXGarageQual)
- df$GarageTypeXGarageCond = as.factor(df$GarageTypeXGarageCond)
- df$GarageQualXGarageCond = as.factor(df$GarageQualXGarageCond)
- df$LandContourXLandSlope = as.factor(df$OverallQualXOverallCond)
- df$Condition1XCondition2 = as.factor(df$OverallQualXOverallCond)
- df$RoofStyleXRoofMatl = as.factor(df$RoofStyleXRoofMatl)
- 
- return(df)
-}
-
-df_train = get_interaction_features(df_train)
-df_test = get_interaction_features(df_test)
 ```
 
 
@@ -531,6 +656,11 @@ HighQualFinSF
 OthrRmsAbvGrd + 2
 OutdoorSF
 
+```{r}
+range(df_united$X2ndFlrSF)
+```
+
+
 
 ## Data Transformations
 
@@ -541,51 +671,67 @@ log_transformation = function(df) {
   df = df %>%
     mutate(LotArea = log(LotArea),
            LotFrontage = log(LotFrontage),
-           MasVnrArea = log(MasVnrArea),
-           BsmtFinSF1 = log(BsmtFinSF1),
-           BsmtFinSF2 = log(BsmtFinSF2),
-           TotalBsmtSF = log(TotalBsmtSF),
+           MasVnrArea = log(MasVnrArea + 1),
+           BsmtFinSF1 = log(BsmtFinSF1 + 1),
+           BsmtFinSF2 = log(BsmtFinSF2 + 1),
+           TotalBsmtSF = log(TotalBsmtSF + 1),
            X1stFlrSF = log(X1stFlrSF),
-           X2ndFlrSF = log(X2ndFlrSF),
-           LowQualFinSF = log(LowQualFinSF),
+           X2ndFlrSF = log(X2ndFlrSF + 1),
+           LowQualFinSF = log(LowQualFinSF + 1),
            GrLivArea = log(GrLivArea),
            TotRmsAbvGrd = log(TotRmsAbvGrd),
-           GarageArea = log(GarageArea),
-           WoodDeckSF = log(WoodDeckSF),
-           OpenPorchSF = log(OpenPorchSF),
-           EnclosedPorch = log(EnclosedPorch),
-           X3SsnPorch = log(X3SsnPorch),
-           ScreenPorch = log(ScreenPorch),
-           PoolArea = log(PoolArea),
-           MiscVal = log(MiscVal),
+           GarageArea = log(GarageArea + 1),
+           WoodDeckSF = log(WoodDeckSF + 1),
+           OpenPorchSF = log(OpenPorchSF + 1),
+           EnclosedPorch = log(EnclosedPorch + 1),
+           X3SsnPorch = log(X3SsnPorch + 1),
+           ScreenPorch = log(ScreenPorch + 1),
+           PoolArea = log(PoolArea + 1),
+           MiscVal = log(MiscVal + 1),
            TotalBaths = log(TotalBaths),
            TotalSF = log(TotalSF),
            HighQualFinSF = log(HighQualFinSF),
-           OthrRmsAbvGrd = log(OthrRmsAbvGrd),
-           OutdoorSF = log(OutdoorSF)
+           OthrRmsAbvGrd = log(OthrRmsAbvGrd + 1),
+           OutdoorSF = log(OutdoorSF + 1)
     )
 }
            
 # change response_variable to log(response_variable) - need to remember to convert back with exp(response_variable) when predicting prices
 response_variable = log(response_variable)
 
-# modify test and train dataframes
-df_train = log_transformation(df_train)
-df_test = log_transformation(df_test)
+# set aside an untransformed version
+df_united_untransformed = df_united 
+
+# transform values in dataframe
+df_united = log_transformation(df_united)
+
+```
+
+
+
+```{r}
+names(df_united)
+```
+
+```{r categorical boxplots}
+df_train = df_united[1:1460, ]
+df_test = df_united[1461:2919, ]
+
+gg_box = ggplot(df_train, aes(y = response_variable))
+
+gg_box + geom_boxplot(aes(x=reorder(MiscFeature, response_variable, FUN = median)))
+
+
+
 ```
 
 ```{r}
-names(df_train)
+unique(df_test$HouseStyle)
 ```
 
-```{r}
-map_chr(df_train, class)
-map_chr(df_test, class)
 
-```
-
-Categorical:
-MSSubclass
+))Categorical:
+MSSubClass
 MSZoning
 Street
 Alley
@@ -691,12 +837,532 @@ OthrRmsAbvGrd
 OutdoorSF
 
 
-
 ```{r}
 
-## when training data on interaction featuress, make sure that some interaction feature exists in the test dataset. Sometimes there is't a map between 
-tr = ggplot(data = df_train)
-te = ggplot(data = df_test)
+categoricals = c('MSSubClass', 'MSZoning', 'Street', 'Alley', 'LotShape', 'LandContour', 'LotConfig', 'LandSlope', 'Neighborhood', 'BldgType', 'HouseStyle', 'OverallQual', 'OverallCond', 'RoofStyle', 'RoofMatl', 'Exterior1st', 'Exterior2nd', 'MasVnrType', 'ExterQual', 'ExterCond', 'Foundation', 'BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'Heating', 'HeatingQC', 'CentralAir', 'Electrical', 'KitchenQual', 'Functional', 'FireplaceQu', 'GarageType', 'GarageFinish', 'GarageQual', 'GarageCond', 'PavedDrive', 'PoolQC', 'Fence', 'MiscFeature', 'MoSold', 'SaleType', 'SaleCondition')
+
+train_levels = map(categoricals, function(s) unique(df_train[[s]]))
+test_levels = map(categoricals, function(s) unique(df_test[[s]]))
+
+
+for(i in seq_along(test_levels)){
+ print(setdiff(test_levels[[i]], train_levels[[i]]))
+}
+
+for(i in seq_along(test_levels)){
+ print(setdiff(train_levels[[i]], test_levels[[i]]))
+}
+
+
+```
+```{r}
+qualnumeric = as.numeric(df_united$OverallQual)
+condnumeric = as.numeric(df_united$OverallCond)
+test = df_united_no_levelsremoved %>%
+  mutate(OverallNumeric = qualnumeric * condnumeric)
+
+test1 = test[1:1460, ]
+gg_box1 = ggplot(test1, aes(y = response_variable))
+
+gg_box1 + geom_point(aes(x=OverallNumeric))
+
+
+levels(df_united$BsmtQual)
+, 
+                          #fill = RoofMatl
+                          ))
+```
+
+
+```{r categorical boxplots, fig.width = 10, fig.heigh = 7}
+df_train = df_united[1:1460, ]
+df_test = df_united[1461:2919, ]
+
+fig.width = 30
+gg_box = ggplot(df_train, aes(y = response_variable))
+
+gg_box + geom_boxplot(aes(x=reorder(PoolQC, response_variable, FUN = median), 
+                          #fill = RoofMatl
+                          ))
+
+
+
+```
+
+```{r}
+unique(df_train$KitchenQual)
+unique(df_test$KitchenQual)
+range(df_train$KitchenAbvGr)
+
+which(0 %in% df_train$KitchenAbvGr)
+which(df_train$KitchenAbvGr %in% 0)
+df_train[955,]
+```
+
+
+```{r adjust levels}
+
+remove_levels = function(df){
+  
+  # categorizing '1.5 story PUD' as '1.5 story finished all ages'
+  df[, 'MSSubClass'][df$MSSubClass == 150] = 50
+  factor(df$MSSubClass)
+  
+  
+  # categorizing by on 'eyeballing it' on boxplot of df_united
+  df[, 'HouseStyle'][df$HouseStyle == '2.5Fin'] = '2Story'
+  factor(df$HouseStyle)
+  
+  df[, 'RoofMatl'][df$RoofMatl == 'Metal'] = 'Tar&Grv'
+  df[, 'RoofMatl'][df$RoofMatl == 'Membran'] = 'WdShake'
+  df[, 'RoofMatl'][df$RoofMatl == 'Roll' | 
+                     df$RoofMatl == 'ClyTile'] = 'Tar&Grv'
+  factor(df$RoofMatl)
+  
+  df[, 'Exterior1st'][df$Exterior1st == 'Stone' |
+                        df$Exterior1st == 'ImStucc'] = 'CemntBd'
+  factor(df$Exterior1st)
+  
+  df[, 'Exterior2nd'][df$Exterior2nd == 'Other'] = 'CmentBd'
+  factor(df$Exterior2nd)
+  
+  df[, 'Heating'][df$Heating == 'OthW'] = 'GasW' 
+  df[, 'Heating'][df$Heating == "Floor"] = 'Grav'
+  factor(df$Heating)
+  
+  df[, 'Electrical'][df$Electrical == 'Mix'] = 'FuseP'
+  factor(df$Electrical)
+  
+  # df[, 'FullBath'][df$FullBath == 4] = 3
+  # factor(df$FullBath)
+  # 
+  # df[, 'BedroomAbvGr'][df$BedroomAbvGr == 8] = 6
+  # factor(df$BedroomAbvGr)
+  # 
+  # df[, 'KitchenAbvGr'][df$KitchenAbvGr == 3] = 2
+  # factor(df$KitchenAbvGr)
+  # 
+  # df[, 'Fireplaces'][df$Fireplaces == 4] = 3
+  # factor(df$Fireplaces)
+  # 
+  # df[, 'GarageCars'][df$GarageCars == 5] = 4
+  # factor(df$GarageCars)
+  
+  df[, 'KitchenQual'][df$KitchenQual == 0] = 2
+  factor(df$KitchenQual)
+  
+  # this one is obvious - closest to 5 is 4
+  df[, 'GarageQual'][df$GarageQual == 5] = 4
+  factor(df$GarageQual)
+  
+  df[, 'PoolQC'][df$PoolQC == 2] = 4
+  factor(df$PoolQC)
+  
+  df[, 'MiscFeature'][df$MiscFeature == 5] = 1
+  factor(df$MiscFeature)
+  
+  # 
+  # df[, 'OverallQualXOverallCond'][df$OverallQualXOverallCond == '1*1' |
+  #                                   df$OverallQualXOverallCond == '1*5' |
+  #                                   df$OverallQualXOverallCond == '2*1' |
+  #                                   df$OverallQualXOverallCond == '2*2' |
+  #                                   df$OverallQualXOverallCond == '2*4' |
+  #                                   df$OverallQualXOverallCond == '3*1' |
+  #                                   df$OverallQualXOverallCond == '3*2' |
+  #                                   df$OverallQualXOverallCond == '3*7' |
+  #                                   df$OverallQualXOverallCond == '4*1' |
+  #                                   df$OverallQualXOverallCond == '4*2' |
+  #                                   df$OverallQualXOverallCond == '5*1' |
+  #                                   df$OverallQualXOverallCond == '6*2' |
+  #                                   df$OverallQualXOverallCond == '7*3' |
+  #                                   df$OverallQualXOverallCond == '8*4' |
+  #                                   df$OverallQualXOverallCond == '9*2' |
+  #                                   df$OverallQualXOverallCond == '9*3' |
+  #                                   df$OverallQualXOverallCond == '10*6' |
+  #                                   df$OverallQualXOverallCond == '10*9'] = NA
+  # factor(df$OverallQualXOverallCond)
+  # 
+  # df[, 'ExterQualXExterCond'][df$ExterQualXExterCond == 'Fa*Po' |
+  #                                   df$ExterQualXExterCond == 'Fa*Gd' |
+  #                                   df$ExterQualXExterCond == 'Gd*Fa' |
+  #                                   df$ExterQualXExterCond == 'Gd*Ex' |
+  #                                   df$ExterQualXExterCond == 'Ex*Gd'] = NA
+  # factor(df$ExterQualXExterCond)
+  # 
+  # df[, 'BsmtQualXBsmtCond'][df$BsmtQualXBsmtCond == 'None*1' |
+  #                             df$BsmtQualXBsmtCond == 'None*4' |
+  #                             df$BsmtQualXBsmtCond == '1*3' |
+  #                             df$BsmtQualXBsmtCond == '2*2' |
+  #                             df$BsmtQualXBsmtCond == '3*None' |
+  #                             df$BsmtQualXBsmtCond == '4*None' |
+  #                             df$BsmtQualXBsmtCond == '4*3'] = NA
+  # factor(df$BsmtQualXBsmtCond)
+  # 
+  # # df[, 'BsmtFinSF1XBsmtFinType1'][df$BsmtFinSF1XBsmtFinType1 == '2*5'] = NA
+  # # factor(df$BsmtFinSF1XBsmtFinType1)
+  # # 
+  # # df[, 'BsmtFinSF2XBsmtFinType2'][df$BsmtFinSF2XBsmtFinType2 == '1*2' |
+  # #                                 df$BsmtFinSF2XBsmtFinType2 == '2*6' |
+  # #                                 df$BsmtFinSF2XBsmtFinType2 == '3*3' |
+  # #                                 df$BsmtFinSF2XBsmtFinType2 == '4*None'] = NA
+  # # factor(df$BsmtFinSF2XBsmtFinType2)
+  # # 
+  # df[, 'GarageQualXGarageCond'][df$GarageQualXGarageCond == '1*1' | 
+  #                                 df$GarageQualXGarageCond == '1*5' |
+  #                                 df$GarageQualXGarageCond == '3*1' |
+  #                                 df$GarageQualXGarageCond == '4*2' |
+  #                                 df$GarageQualXGarageCond == '5*4'] = NA
+  # factor(df$GarageQualXGarageCond)
+  # 
+  # # df[, 'HeatingXHeatingQC'][df$HeatingXHeatingQC == 'Wall*Po' | 
+  # #                                 df$HeatingXHeatingQC == 'Wall*TA' |
+  # #                                 df$HeatingXHeatingQC == 'OthW*Fa' |
+  # #                                 df$HeatingXHeatingQC == 'GasW*Ex' |
+  # #                                 df$HeatingXHeatingQC == 'Floor*TA'] = NA
+  # # factor(df$HeatingXHeatingQC)
+  # # 
+  # # df[, 'SaleTypeXSaleCondition'][df$SaleTypeXSaleCondition == 'COD*Family' |
+  # #                                  df$SaleTypeXSaleCondition == 'Con*Partial' |
+  # #                                  df$SaleTypeXSaleCondition == 'Oth*Family' |
+  # #                                  df$SaleTypeXSaleCondition == 'Oth*Normal' |
+  # #                                  df$SaleTypeXSaleCondition == 'ConLI*Family' |
+  # #                                  df$SaleTypeXSaleCondition == 'ConLD*Family' |
+  # #                                  df$SaleTypeXSaleCondition == 'OConLw*Family' |
+  # #                                  df$SaleTypeXSaleCondition == 'CWD*Abnorml' |
+  # #                                  df$SaleTypeXSaleCondition == 'ConLD*Partial' |
+  # #                                  df$SaleTypeXSaleCondition == 'WD*Family'] = NA
+  # # factor(df$SaleTypeXSaleCondition)
+  # 
+  # # df[, 'NeighborhoodXBldgType'][df$NeighborhoodXBldgType == 'CSWISU*Duplex' |
+  # #                                  df$NeighborhoodXBldgType == 'CollgCr*Duplex' |
+  # #                                  df$NeighborhoodXBldgType == 'Timber*TwnhsE' |
+  # #                                  df$NeighborhoodXBldgType == 'NWAmes*2fmCon' |
+  # #                                  df$NeighborhoodXBldgType == 'ClearCr*Twnhs' |
+  # #                                  df$NeighborhoodXBldgType == 'BrkSide*2fmCon' |
+  # #                                  df$NeighborhoodXBldgType == 'IDOTRR*Duplex' |
+  # #                                  df$NeighborhoodXBldgType == 'Timber*2fmCon' |
+  # #                                  df$NeighborhoodXBldgType == 'Mitchel*Twnhs' |
+  # #                                  df$NeighborhoodXBldgType == 'Mitchel*2fmCon'] = NA
+  # # factor(df$NeighborhoodXBldgType)
+  # 
+  # # df[, 'MasVnrAreaXMasVnrType'][df$MasVnrAreaXMasVnrType == '9*BrkCmn' |
+  # #                                  df$MasVnrAreaXMasVnrType == '8*BrkCmn' |
+  # #                                  df$MasVnrAreaXMasVnrType == 'T1*Stone' |
+  # #                                  df$MasVnrAreaXMasVnrType == '8*None'] = NA
+  # # factor(df$MasVnrAreaXMasVnrType)
+  # 
+  # df[, 'KitchenAbvGrXKitchenQual'][df$KitchenAbvGrXKitchenQual == '3*TA'] = '2*TA'
+  # factor(df$KitchenAbvGrXKitchenQual)
+  # 
+  # df[, 'FireplacesXFireplaceQu'][df$FireplacesXFireplaceQu == '4*5' |
+  #                                  df$FireplacesXFireplaceQu == '3*1' |
+  #                                  df$FireplacesXFireplaceQu == '3*2'] = NA
+  # factor(df$FireplacesXFireplaceQu)
+  # 
+  # # df[, 'GarageTypeXGarageQual'][df$GarageTypeXGarageQual == '4*2' |
+  # #                                  df$GarageTypeXGarageQual == '6*None' |
+  # #                                  df$GarageTypeXGarageQual == '3*3' |
+  # #                                  df$GarageTypeXGarageQual == '6*1' |
+  # #                                  df$GarageTypeXGarageQual == '4*3' |
+  # #                                  df$GarageTypeXGarageQual == '5*2'] = NA
+  # # factor(df$GarageTypeXGarageQual)
+  # 
+  # # df[, 'GarageTypeXGarageCond'][df$GarageTypeXGarageCond == '2*4' |
+  # #                                  df$GarageTypeXGarageCond == '6*None' |
+  # #                                  df$GarageTypeXGarageCond == '1*2' |
+  # #                                  df$GarageTypeXGarageCond == '5*2'] = NA
+  # # factor(df$GarageTypeXGarageCond)
+  # 
+  # # df[, 'LandContourXLandSlope'][df$LandContourXLandSlope == 'HLS*Sev' |
+  # #                                  df$LandContourXLandSlope == 'Bnk*Sev'] = NA
+  # # factor(df$LandContourXLandSlope)
+  # 
+  # # df[, 'RoofStyleXRoofMatl'][df$RoofStyleXRoofMatl == 'PShed*WdShngl' |
+  # #                                 df$RoofStyleXRoofMatl == 'Gable*WdShngl' |
+  # #                                 df$RoofStyleXRoofMatl == 'Flat*Metal' |
+  # #                                 df$RoofStyleXRoofMatl == 'Flat*CompShg' |
+  # #                                 df$RoofStyleXRoofMatl == 'Flat*Membran' |
+  # #                                 df$RoofStyleXRoofMatl == 'Hip*WdShngl' |
+  # #                                 df$RoofStyleXRoofMatl == 'Shed*WdShake' |
+  # #                                 df$RoofStyleXRoofMatl == 'Gable*Roll' |
+  # #                                 df$RoofStyleXRoofMatl == 'Hip*ClyTile'] = NA
+  # # factor(df$RoofStyleXRoofMatl)
+  # # 
+  return(df)
+}
+
+
+test = remove_levels(df_united)
+df_united_no_levelsremoved = df_united
+df_united = remove_levels(df_united)
+```
+
+
+
+
+
+test not in train
+[1] "150"
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "4" (35)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "4" (41)
+character(0)
+character(0)
+character(0)
+[1] "5" (45)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "2*2" "4*1" "2*4" "5*1" "6*2" "9*3" "3*1" "2*1" "1*5" (55)
+[1] "Gd*Ex" "Fa*Po" "Gd*Fa" "Fa*Gd" (56)
+[1] "Ex*None" "Fa*None" "None*Gd" "None*Po" (57)
+character(0)
+character(0)
+character(0)
+[1] "Wall*Po" (61)
+[1] "COD*Family"   "Con*Partial"  "Oth*Family"   "Oth*Normal"   "ConLI*Family"
+[6] "ConLD*Family" "ConLw*Family" (62)
+[1] "SWISU*Duplex"   "CollgCr*Duplex" "Timber*TwnhsE"  "NWAmes*2fmCon"
+[5] "ClearCr*Twnhs" (63)
+character(0)
+character(0)
+[1] "4*Ex" (66)
+[1] "Basment*None" (67)
+[1] "Basment*None" (68)
+[1] "2*2" "4*1" "2*4" "5*1" "6*2" "9*3" "3*1" "2*1" "1*5" (69)
+[1] "2*2" "4*1" "2*4" "5*1" "6*2" "9*3" "3*1" "2*1" "1*5" (70)
+[1] "Shed*WdShngl" (71)
+
+
+train not in test
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "RRNn" "RRAn" "RRAe" (11)
+character(0)
+[1] "2.5Fin" (13)
+character(0)
+character(0)
+character(0)
+[1] "Metal"   "Membran" "Roll"    "ClyTile" (17)
+[1] "Stone"   "ImStucc" (18)
+[1] "Other" (19)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "OthW"  "Floor" (29)
+character(0)
+character(0)
+[1] "Mix" (32)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "8" (37)
+[1] "3" (38)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "3*2"  "10*9" "8*4"  "1*1"  "9*2"  "3*7"  "4*2"  "10*6" "7*3" (55)
+[1] "Ex*Gd" (56)
+character(0)
+character(0)
+[1] "2*LwQ"  "4*None" (59)
+character(0)
+[1] "GasW*Ex"  "Wall*TA"  "OthW*Fa"  "Floor*TA" (61)
+[1] "CWD*Abnorml"   "ConLD*Partial" "CWD*Family" (62)   
+[1] "BrkSide*2fmCon" "IDOTRR*Duplex"  "Timber*2fmCon"  "Mitchel*Twnhs" 
+[5] "Mitchel*2fmCon" (63)
+[1] "9*BrkCmn" "8*BrkCmn" "1*Stone"  "8*None" (64)
+[1] "3*TA" (65)
+[1] "3*Po" (66)
+character(0)
+character(0)
+[1] "3*2"  "10*9" "8*4"  "1*1"  "9*2"  "3*7"  "4*2"  "10*6" "7*3" (69)
+[1] "3*2"  "10*9" "8*4"  "1*1"  "9*2"  "3*7"  "4*2"  "10*6" "7*3" (70)
+[1] "Gable*WdShngl" "Flat*Metal"    "Flat*CompShg"  "Flat*Membran" 
+[5] "Hip*WdShngl"   "Shed*WdShake"  "Gable*Roll"    "Hip*ClyTile"  (71)
+
+
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "RRNn" "RRAn" "RRAe"
+character(0)
+[1] "2.5Fin"
+character(0)
+character(0)
+character(0)
+[1] "Metal"   "Membran" "Roll"    "ClyTile"
+[1] "Stone"   "ImStucc"
+[1] "Other"
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "OthW"  "Floor"
+character(0)
+character(0)
+[1] "Mix"
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "8"
+[1] "3"
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+character(0)
+[1] "1"
+character(0)
+character(0)
+[1] "2"
+character(0)
+[1] "4"
+character(0)
+character(0)
+character(0)
+[1] "3*2"  "10*9" "8*4"  "1*1"  "9*2"  "3*7"  "4*2"  "10*6" "7*3" 
+[1] "Ex*Gd"
+character(0)
+character(0)
+[1] "4*None"
+[1] "1*5" "1*1"
+[1] "GasW*Ex"  "Wall*TA"  "OthW*Fa"  "Floor*TA"
+[1] "CWD*Abnorml"   "ConLD*Partial" "CWD*Family"   
+[1] "BrkSide*2fmCon" "IDOTRR*Duplex"  "Timber*2fmCon"  "Mitchel*Twnhs" 
+[5] "Mitchel*2fmCon"
+[1] "9*BrkCmn" "8*BrkCmn" "1*Stone"  "8*None"  
+[1] "3*TA"
+[1] "3*1" "3*2"
+[1] "6*1" "4*3" "5*2"
+[1] "1*2" "5*2"
+[1] "HLS*Sev" "Bnk*Sev"
+[1] "Artery*Artery" "Feedr*RRNn"    "RRNn*Feedr"    "Artery*PosA"  
+[5] "Feedr*RRAn"    "Feedr*RRAe"   
+[1] "Gable*WdShngl" "Flat*Metal"    "Flat*CompShg"  "Flat*Membran" 
+[5] "Hip*WdShngl"   "Shed*WdShake"  "Gable*Roll"    "Hip*ClyTile"  
+
+
+```{r}
+tr_box = ggplot(data = df_united_no_levelsremoved[1:1460, ], (aes(y = response_variable)))
+
+
+tr_box + geom_boxplot(aes(x = reorder(MSSubClass, response_variable, FUN = median), fill = MSSubClass))
+
+
+levels(df_united$Condition1)
+
+levels(df_united$Condition2)
+
+
+
+dummies = model.matrix(~df_united$Condition1)
+dummies
+
+dummies2 = model.matrix(~df_united$Condition2)
+dummies2
+
+dummies + dummies2
+
+dummies3 = cbind(dummies, dummies2[match(rownames(dummies), rownames(dummies2))])
+
+vec = as.vector(as.matrix(df_united[,c("Condition1", "Condition2")]))
+
+vec
+```
+
+
+
+```{r boxplots of categoricals}
+
+
+
 
 grid.arrange(tr + geom_bar(aes(x=MSSubClass)), 
              te + geom_bar(aes(x=MSSubClass)), 
@@ -976,7 +1642,292 @@ grid.arrange(tr + geom_bar(aes(x=RoofStyleXRoofMatl)),
 
 ```
 
-```{r}
+
+
+```{r EDA of Categoricals}
+
+tr = ggplot(data = df_united[1:1460, ])
+te = ggplot(data = df_united[1460:2919, ])
+
+grid.arrange(tr + geom_bar(aes(x=MSSubClass)), 
+             te + geom_bar(aes(x=MSSubClass)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=MSZoning)), 
+             te + geom_bar(aes(x=MSZoning)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Street)), 
+             te + geom_bar(aes(x=Street)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Alley)), 
+             te + geom_bar(aes(x=Alley)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LotShape)), 
+             te + geom_bar(aes(x=LotShape)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LandContour)), 
+             te + geom_bar(aes(x=LandContour)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LotConfig)), 
+             te + geom_bar(aes(x=LotConfig)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LandSlope)), 
+             te + geom_bar(aes(x=LandSlope)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Neighborhood)), 
+             te + geom_bar(aes(x=Neighborhood)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Condition1)), 
+             te + geom_bar(aes(x=Condition1)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Condition2)), 
+             te + geom_bar(aes(x=Condition2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BldgType)), 
+             te + geom_bar(aes(x=BldgType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=HouseStyle)), 
+             te + geom_bar(aes(x=HouseStyle)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=OverallQual)), 
+             te + geom_bar(aes(x=OverallQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=OverallCond)), 
+             te + geom_bar(aes(x=OverallCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=RoofStyle)), 
+             te + geom_bar(aes(x=RoofStyle)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=RoofMatl)), 
+             te + geom_bar(aes(x=RoofMatl)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Exterior1st)), 
+             te + geom_bar(aes(x=Exterior1st)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Exterior2nd)), 
+             te + geom_bar(aes(x=Exterior2nd)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=ExterCond)), 
+             te + geom_bar(aes(x=ExterCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=ExterQual)), 
+             te + geom_bar(aes(x=ExterQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Foundation)), 
+             te + geom_bar(aes(x=Foundation)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtQual)), 
+             te + geom_bar(aes(x=BsmtQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtCond)), 
+             te + geom_bar(aes(x=BsmtCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtExposure)), 
+             te + geom_bar(aes(x=BsmtExposure)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFinType1)), 
+             te + geom_bar(aes(x=BsmtFinType1)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFinType2)), 
+             te + geom_bar(aes(x=BsmtFinType2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Heating)), 
+             te + geom_bar(aes(x=Heating)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=HeatingQC)), 
+             te + geom_bar(aes(x=HeatingQC)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=CentralAir)), 
+             te + geom_bar(aes(x=CentralAir)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Electrical)), 
+             te + geom_bar(aes(x=Electrical)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFullBath)), 
+             te + geom_bar(aes(x=BsmtFullBath)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtHalfBath)), 
+             te + geom_bar(aes(x=BsmtHalfBath)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=FullBath)), 
+             te + geom_bar(aes(x=FullBath)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=HalfBath)), 
+             te + geom_bar(aes(x=HalfBath)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BedroomAbvGr)), 
+             te + geom_bar(aes(x=BedroomAbvGr)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=KitchenAbvGr)), 
+             te + geom_bar(aes(x=KitchenAbvGr)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=KitchenQual)), 
+             te + geom_bar(aes(x=KitchenQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Functional)), 
+             te + geom_bar(aes(x=Functional)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Fireplaces)), 
+             te + geom_bar(aes(x=Fireplaces)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=FireplaceQu)), 
+             te + geom_bar(aes(x=FireplaceQu)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageType)), 
+             te + geom_bar(aes(x=GarageType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageFinish)), 
+             te + geom_bar(aes(x=GarageFinish)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageCars)), 
+             te + geom_bar(aes(x=GarageCars)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageQual)), 
+             te + geom_bar(aes(x=GarageQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageCond)), 
+             te + geom_bar(aes(x=GarageCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=PavedDrive)), 
+             te + geom_bar(aes(x=PavedDrive)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=PoolQC)), 
+             te + geom_bar(aes(x=PoolQC)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Fence)), 
+             te + geom_bar(aes(x=Fence)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=MiscFeature)), 
+             te + geom_bar(aes(x=MiscFeature)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=MoSold)), 
+             te + geom_bar(aes(x=MoSold)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=SaleType)), 
+             te + geom_bar(aes(x=SaleType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=SaleCondition)), 
+             te + geom_bar(aes(x=SaleCondition)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=OverallQualXOverallCond)), 
+             te + geom_bar(aes(x=OverallQualXOverallCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=ExterQualXExterCond)), 
+             te + geom_bar(aes(x=ExterQualXExterCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtQualXBsmtCond)), 
+             te + geom_bar(aes(x=BsmtQualXBsmtCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFinSF1XBsmtFinType1)), 
+             te + geom_bar(aes(x=BsmtFinSF1XBsmtFinType1)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=BsmtFinSF2XBsmtFinType2)), 
+             te + geom_bar(aes(x=BsmtFinSF2XBsmtFinType2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=HeatingXHeatingQC)), 
+             te + geom_bar(aes(x=HeatingXHeatingQC)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=SaleTypeXSaleCondition)), 
+             te + geom_bar(aes(x=SaleTypeXSaleCondition)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=NeighborhoodXBldgType)), 
+             te + geom_bar(aes(x=NeighborhoodXBldgType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=MasVnrAreaXMasVnrType)), 
+             te + geom_bar(aes(x=MasVnrAreaXMasVnrType)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=KitchenAbvGrXKitchenQual)), 
+             te + geom_bar(aes(x=KitchenAbvGrXKitchenQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=FireplacesXFireplaceQu)), 
+             te + geom_bar(aes(x=FireplacesXFireplaceQu)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageTypeXGarageQual)), 
+             te + geom_bar(aes(x=GarageTypeXGarageQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=GarageTypeXGarageCond)), 
+             te + geom_bar(aes(x=GarageTypeXGarageCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=LandContourXLandSlope)), 
+             te + geom_bar(aes(x=LandContourXLandSlope)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=Condition1XCondition2)), 
+             te + geom_bar(aes(x=Condition1XCondition2)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_bar(aes(x=RoofStyleXRoofMatl)), 
+             te + geom_bar(aes(x=RoofStyleXRoofMatl)), 
+             ncol = 2)
+
+```
+
+```{r EDA of Numerics}
 
 grid.arrange(tr + geom_histogram(aes(x=LotFrontage)), 
              te + geom_histogram(aes(x=LotFrontage)), 
@@ -1101,13 +2052,21 @@ grid.arrange(tr + geom_histogram(aes(x=OutdoorSF)),
 ```
 
 ```{r}
-colMtx <- matrix(names(df_train)[1:length(df_train)-1], nrow = 6)
-for (i in 1:ncol(colMtx)) {
-  tableplot(df_train, 
-            select_string = c(colMtx[,i], "SalePrice"), 
-            sortCol = "SalePrice", decreasing = TRUE, 
-            nBins = 30)
-}
+# temp_train = df_train %>%
+#   mutate(SalePrice = response_variable)
+# colMtx <- matrix(names(temp_train)[1:length(df_train)-1], nrow = 6)
+# for (i in 1:ncol(colMtx)) {
+#   tableplot(temp_train,
+#             select_string = c(colMtx[,i], 'SalePrice'),
+#             sortCol = 'SalePrice', decreasing = TRUE,
+#             nBins = 30)
+# }
+```
+
+
+```{r}
+
+
 ```
 
 
@@ -1115,6 +2074,9 @@ for (i in 1:ncol(colMtx)) {
 ggplot(df_train[df_train$PoolArea != 0, ], aes(x = PoolArea)) +
   #stat_count()
     geom_histogram()
+
+
+df_train$PoolArea
 summary(df_train$PoolArea)
 sum(is.na(df_train$PoolArea))
 ```
@@ -1131,8 +2093,102 @@ hist(log(response_variable))
 sapply(df_train, function(x) sum(is.nan(x)))
 ```
 
+## Modeling
 
 
+```{r modeling variables}
+x_train = df_united[1:1460, ]
+x_test = df_united[1461:2919, ]
+
+y = response_variable
+```
+
+
+```{r}
+
+unique(x_train[, "SaleCondition"])  %in% intersect(unique(x_train[,"SaleCondition"]), unique(x_test[, "SaleCondition"]))
+
+
+```
+
+
+```{r}
+dropcats <- function(k) {
+   xtst <- x_test[,k]
+   xtrn <- x_train[,k]
+   cmp.tst.trn <- (unique(xtst) %in% unique(xtrn))
+   if (is.factor(xtst) & any(!cmp.tst.trn)) {
+      cat.tst <- unique(xtst)
+      apply(x_test[,k]==matrix(rep(cat.tst[cmp.tst.trn],each=nrow(x_test)),
+                      nrow=nrow(x_test)),1,any)
+   } else {
+      rep(TRUE,nrow(x_test))
+   }
+}   
+filt <- apply(sapply(2:ncol(df_united),dropcats),1,all)
+subset.test <- x_test[filt,]
+
+```
+
+```{r}
+sapply(df_united, function(x) sum(is.infinite(x)))
+```
+
+
+```{r}
+df_united_no_interactions[, 'MSSubClass'][df_united_no_interactions$MSSubClass == 150] = NA
+df_united_no_interactions[, 'FullBath'][df_united_no_interactions$FullBath == 4] = 3
+df_united_no_interactions[, 'Fireplaces'][df_united_no_interactions$Fireplaces == 4] = 3
+df_united_no_interactions[, 'GarageCars'][df_united_no_interactions$GarageCars == 5] = 4
+
+
+```
+
+```{r}
+df_united1 = remove_levels(df_united_untransformed)
+x_train = df_united1[1:1460, ]
+x_test = df_united1[1461:2919, ]
+
+
+```
+
+
+```{r multiple linear regression}
+x_train = df_united[1:1460, ]
+x_test = df_united[1461:2919, ]
+y = response_variable
+
+# fit model
+multilinear = lm(y ~ ., data = x_train)
+
+
+# check summary
+summary(multilinear)
+plot(multilinear)
+
+#Get train and test predictions
+multilinear_predictions_test = predict(multilinear, newdata = x_test)
+multilinear_predictions_train = predict(multilinear, newx = x_train)
+
+exp(multilinear_predictions_test)
+# find train MSE
+mean((multilinear_predictions_train - y)^2) #Train MSE = 0.00870038
+
+# write csv file
+write.csv(exp(multilinear_predictions_test), file = 'multilinear.csv')
+
+```
+
+
+
+
+lm - non-predictive features:
+LotFrontage
+
+
+```{r}
+sapply(df_united, function(x) sum(is.na(x)))
+```
 
 
 ```{r}
@@ -1140,13 +2196,11 @@ model = lm(response_variable ~ ., data = df_train)
 summary(model)
 ```
 
-```{r}
-plot(model)
-vif(model) # doesn't work - perfect multicollinerarity
-av.plots(model)
+```{r fit AIC and BIC Models}
 
-model.full = model
-model.empty = lm(response_variable ~ 1, data = df_train)
+
+model.full = multilinear
+model.empty = lm(y ~ 1, data = x_train)
 scope = list(lower = formula(model.empty), upper = formula(model.full))
 
 
@@ -1163,93 +2217,618 @@ bothBIC.empty = step(model.empty, scope, direction = "both", k = log(1460))
 bothBIC.full = step(model.full, scope, direction = "both", k = log(1460))
 
 ```
-```{r}
-influencePlot(forwardAIC)
+
+
+```{r Inspecting results}
+summary(forwardAIC)
+summary(bothAIC.empty)
+summary(backwardAIC)
+summary(bothAIC.full)
+
+summary(forwardBIC)
+summary(bothBIC.empty)
+summary(backwardBIC)
+summary(bothBIC.full)
+
+plot(forwardAIC)
+plot(bothAIC.empty)
+plot(backwardAIC)
+plot(bothAIC.full)
+
+plot(forwardBIC)
+plot(bothBIC.empty)
+plot(backwardBIC)
+plot(bothBIC.full)
+
+influencePlot(forwardBIC)
 ```
 
+Features Selected:
+ForwardAIC: OverallQualXOverallCond + HighQualFinSF + 
+    NeighborhoodXBldgType + TotalBaths + GarageCars + FireplacesXFireplaceQu + 
+    YearBuilt + MSZoning + GrLivArea + LotArea + Condition2 + 
+    BsmtUnfSF + SaleCondition + Functional + Condition1 + KitchenQual + 
+    ExterCond + HeatingXHeatingQC + Foundation + Exterior1st + 
+    PoolQC + BedroomAbvGr + GarageArea + LandSlope + LotConfig + 
+    ScreenPorch + WoodDeckSF + CentralAir + YearRemodAdd + BsmtFullBath + 
+    GarageFinish + BsmtFinSF1 + BsmtFinType1 + X3SsnPorch + EnclosedPorch + 
+    BsmtFinSF2
+
+ForwardBIC: OverallQual + HighQualFinSF + 
+    Neighborhood + OverallCond + BsmtUnfSF + GarageCars + YearBuilt + 
+    LotArea + RoofMatl + GrLivArea + MSZoning + Condition2 + 
+    SaleCondition + OutdoorSF + YearLastUpdated + Functional + 
+    Fireplaces + CentralAir + X2ndFlrSF + TotalBaths + KitchenAbvGr + 
+    ScreenPorch
+
+BothBIC.empty: OverallQual + HighQualFinSF + 
+    Neighborhood + OverallCond + BsmtUnfSF + GarageCars + YearBuilt + 
+    LotArea + RoofMatl + GrLivArea + MSZoning + Condition2 + 
+    SaleCondition + OutdoorSF + YearLastUpdated + Functional + 
+    CentralAir + X2ndFlrSF + TotalBaths + KitchenAbvGr + ScreenPorch
+    
+BackwardBIC: MSZoning + LotArea + LandSlope + 
+    Condition2 + YearBuilt + YearRemodAdd + Foundation + BsmtFinSF1 + 
+    BsmtUnfSF + CentralAir + GrLivArea + TotRmsAbvGrd + Functional + 
+    GarageCars + ScreenPorch + PoolQC + TotalBaths + TotalSF + 
+    OthrRmsAbvGrd + OverallQualXOverallCond
+    
+
+BothBIC.full: MSZoning + LotArea + LandSlope + 
+    Condition2 + YearBuilt + YearRemodAdd + Foundation + BsmtFinSF1 + 
+    BsmtUnfSF + CentralAir + GrLivArea + TotRmsAbvGrd + Functional + 
+    GarageCars + ScreenPorch + PoolQC + TotalBaths + TotalSF + 
+    OthrRmsAbvGrd + OverallQualXOverallCond + SaleCondition + 
+    Fireplaces
+
+
+
+```{r AIC BIC Predictions}
+
+
+#Get predictions for each model
+# test
+forwardAIC_predictions_test = predict(forwardAIC, newdata = subset.test)
+bothAIC.empty_predictions_test = predict(bothAIC.empty, newdata = subset.test)
+backwardAIC_predictions_test = predict(backwardAIC, newdata = subset.test)
+bothAIC.full_predictions_test = predict(bothAIC.full, newdata = subset.test)
+
+forwardBIC_predictions_test = predict(forwardBIC, newdata = subset.test)
+bothBIC.empty_predictions_test = predict(bothBIC.empty, newdata = subset.test)
+backwardBIC_predictions_test = predict(backwardBIC, newdata = subset.test)
+bothBIC.full_predictions_test = predict(bothBIC.full, newdata = subset.test)
+
+# train
+forwardAIC_predictions_train = predict(forwardAIC, newx = x_train)
+bothAIC.empty_predictions_train = predict(bothAIC.empty, newx = x_train)
+backwardAIC_predictions_train = predict(backwardAIC, newx = x_train)
+bothAIC.full_predictions_train = predict(bothAIC.full, newx = x_train)
+
+forwardBIC_predictions_train = predict(forwardBIC, newx = x_train)
+bothBIC.empty_predictions_train = predict(bothBIC.empty, newx = x_train)
+backwardBIC_predictions_train = predict(backwardBIC, newx = x_train)
+bothBIC.full_predictions_train = predict(bothBIC.full, newx = x_train)
+
+# find MSE
+mean((forwardAIC_predictions_train - y)^2) #Train MSE = 0.007967357
+mean((bothAIC.empty_predictions_train - y)^2) #Train MSE = 
+mean((backwardAIC_predictions_train - y)^2) #Train MSE = 
+mean((bothAIC.full_predictions_train - y)^2) #Train MSE = 
+
+mean((forwardBIC_predictions_train - y)^2) #Train MSE = 0.01100561
+mean((bothBIC.empty_predictions_train - y)^2) #Train MSE = 0.01114312
+mean((backwardBIC_predictions_train - y)^2) #Train MSE = 0.01226122
+mean((bothBIC.full_predictions_train - y)^2) #Train MSE = 0.01140726
+
+
+# write csv file
+write.csv(exp(forwardAIC_predictions_test), file = 'forwardAIC.csv')
+write.csv(exp(bothAIC.empty_predictions_test), file = 'bothAIC_empty.csv')
+write.csv(exp(backwardAIC_predictions_test), file = 'backwardAIC.csv')
+write.csv(exp(bothAIC.full_predictions_test), file = 'bothAIC_full.csv')
+
+write.csv(exp(forwardBIC_predictions_test), file = 'forwardBIC.csv')
+write.csv(exp(bothBIC.empty_predictions_test), file = 'bothBIC_empty.csv')
+write.csv(exp(backwardBIC_predictions_test), file = 'backwardBIC.csv')
+write.csv(exp(bothBIC.full_predictions_test), file = 'bothBIC_full.csv')
+
+```
+
+
 ```{r}
-#Need matrices for glmnet() function. Automatically conducts conversions as well
-#for factor variables into dummy variables.
-x = model.matrix(response_variable ~ ., df_train)[, -1] #Dropping the intercept column.
-y = response_variable
+# for glmnet we need data in matrix
+m = data.matrix(df_united)
+m_train = m[1:1460, ]
+m_test = m[1461:2919, ]
+
 
 #Values of lambda over which to check.
-grid = 10^seq(5, -2, length = 100)
+grid = 10^seq(10, -2, length = 100)
+```
 
-#Fitting the ridge regression. Alpha = 0 for ridge regression.
-ridge.models = glmnet(x, y, alpha = 0, lambda = grid)
 
-dim(coef(ridge.models)) #20 different coefficients, estimated 100 times --
-#once each per lambda value.
-coef(ridge.models) #Inspecting the various coefficient estimates.
-
-#What do the estimates look like for a smaller value of lambda?
-ridge.models$lambda[80] #Lambda = 0.2595.
-coef(ridge.models)[, 80] #Estimates not close to 0.
-sqrt(sum(coef(ridge.models)[-1, 80]^2)) #L2 norm is 136.8179.
-
-#What do the estimates look like for a larger value of lambda?
-ridge.models$lambda[15] #Lambda = 10,235.31.
-coef(ridge.models)[, 15] #Most estimates close to 0.
-sqrt(sum(coef(ridge.models)[-1, 15]^2)) #L2 norm is 7.07.
-
-#Visualizing the ridge regression shrinkage.
-plot(ridge.models, xvar = "lambda", label = TRUE, main = "Ridge Regression")
-
-#Can use the predict() function to obtain ridge regression coefficients for a
-#new value of lambda, not necessarily one that was within our grid:
-predict(ridge.models, s = 50, type = "coefficients")
-
-#Creating training and testing sets. Here we decide to use a 70-30 split with
-#approximately 70% of our data in the training set and 30% of our data in the
-#test set.
-set.seed(0)
-train = sample(1:nrow(x), 7*nrow(x)/10)
-test = (-train)
-y.test = y[test]
-
-length(train)/nrow(x)
-length(y.test)/nrow(x)
-
-#Let's attempt to fit a ridge regression using some arbitrary value of lambda;
-#we still have not yet figured out what the best value of lambda should be!
-#We will arbitrarily choose 5. We will now use the training set exclusively.
-ridge.models.train = glmnet(x[train, ], y[train], alpha = 0, lambda = grid)
-ridge.lambda5 = predict(ridge.models.train, s = 5, newx = x[test, ])
-mean((ridge.lambda5 - y.test)^2)
-
-#Here, the MSE is approximately 115,541.
-
-#What would happen if we fit a ridge regression with an extremely large value
-#of lambda? Essentially, fitting a model with only an intercept:
-ridge.largelambda = predict(ridge.models.train, s = 1e10, newx = x[test, ])
-mean((ridge.largelambda - y.test)^2)
-
-#Here, the MSE is much worse at aproximately 208,920.
-
-#Instead of arbitrarily choosing random lambda values and calculating the MSE
-#manually, it's a better idea to perform cross-validation in order to choose
-#the best lambda over a slew of values.
-
-#Running 10-fold cross validation.
-set.seed(0)
-cv.ridge.out = cv.glmnet(x[train, ], y[train],
+```{r Ridge}
+## Fit Ridge Regression
+cv.ridge = cv.glmnet(m_train, y, 
                          lambda = grid, alpha = 0, nfolds = 10)
-plot(cv.ridge.out, main = "Ridge Regression\n")
-bestlambda.ridge = cv.ridge.out$lambda.min
-bestlambda.ridge
-log(bestlambda.ridge)
 
-#What is the test MSE associated with this best value of lambda?
-ridge.bestlambdatrain = predict(ridge.models.train, s = bestlambda.ridge, newx = x[test, ])
-mean((ridge.bestlambdatrain - y.test)^2)
+# Summary and Plot
+summary(cv.ridge)
+plot(cv.ridge, main = "Ridge Regression\n")
 
-#Here the MSE is lower at approximately 113,173; a further improvement
-#on that which we have seen above. With "cv.ridge.out", we can actually access
-#the best model from the cross validation without calling "ridge.models.train"
-#or "bestlambda.ridge":
-ridge.bestlambdatrain = predict.cv.glmnet(cv.ridge.out, s ="lambda.min", newx = x[test, ])
-mean((ridge.bestlambdatrain - y.test)^2)
+
+#Get predictions for train and test matrixes
+ridge.bestlambda_test = predict(cv.ridge, s ="lambda.min", newx = m_test)
+ridge.bestlambda_train = predict(cv.ridge, s ="lambda.min", newx = m_train)
+
+# Find MSE
+mean((ridge.bestlambda_train - y)^2) # Train MSE = 0.0154153
+
+# write csv file
+write.csv(exp(ridge.bestlambda_test), file = 'ridge.csv')
+
+```
+
+```{r Elasaticnet}
+
+##### Elasticnet 
+
+# fit models for three values of alpha
+cv.elasticnet25 = cv.glmnet(m_train, y, 
+                         lambda = grid, alpha = 0.25, nfolds = 10)
+cv.elasticnet50 = cv.glmnet(m_train, y, 
+                         lambda = grid, alpha = 0.5, nfolds = 10)
+cv.elasticnet75 = cv.glmnet(m_train, y, 
+                         lambda = grid, alpha = 0.75, nfolds = 10)
+
+# Summary and plot
+summary(cv.elasticnet25)
+summary(cv.elasticnet50)
+summary(cv.elasticnet75)
+
+plot(cv.elasticnet25, main = "Elasticnet25 Regression\n")
+plot(cv.elasticnet50, main = "Elasticnet50 Regression\n")
+plot(cv.elasticnet75, main = "Elasticnet75 Regression\n")
+
+#Get predictions for train and test matrixes
+elasticnet25.bestlambda_test = predict(cv.elasticnet25, s ="lambda.min", newx = m_test)
+elasticnet50.bestlambda_test = predict(cv.elasticnet50, s ="lambda.min", newx = m_test)
+elasticnet75.bestlambda_test = predict(cv.elasticnet75, s ="lambda.min", newx = m_test)
+
+elasticnet25.bestlambda_train = predict(cv.elasticnet25, s ="lambda.min", newx = m_train)
+elasticnet50.bestlambda_train = predict(cv.elasticnet50, s ="lambda.min", newx = m_train)
+elasticnet75.bestlambda_train = predict(cv.elasticnet75, s ="lambda.min", newx = m_train)
+
+# Find MSE
+mean((elasticnet25.bestlambda_train - y)^2) # Train MSE = 0.01643509
+mean((elasticnet50.bestlambda_train - y)^2) # Train MSE = 0.01651402
+mean((elasticnet75.bestlambda_train - y)^2) # Train MSE = 0.01662107
+
+# write csv file
+write.csv(exp(elasticnet25.bestlambda_test), file = 'elasticnet25.csv')
+write.csv(exp(elasticnet50.bestlambda_test), file = 'elasticnet50.csv')
+write.csv(exp(elasticnet75.bestlambda_test), file = 'elasticnet75.csv')
+```
+
+```{r Lasso}
+
+## Lasso
+
+# fit model
+cv.lasso = cv.glmnet(m_train, y, 
+                         lambda = grid, alpha = 1, nfolds = 10)
+
+# summary and plot
+summary(cv.lasso)
+plot(cv.lasso, main = "Lasso Regression\n")
+
+# get predictions for train and test matrices
+lasso.bestlambda_test = predict(cv.lasso, s ="lambda.min", newx = m_test)
+lasso.bestlambda_train = predict(cv.lasso, s ="lambda.min", newx = m_train)
+
+# Find MSE
+mean((lasso.bestlambda_train - y)^2) # Train MSE = 0.0170298
+
+# write csv file
+write.csv(exp(lasso.bestlambda_test), file = 'lasso.csv')
+```
+
+```{r PCR}
+
+# fit pcr
+cv.pcr = pcr(y ~ ., data = x_train, validation = 'CV')
+summary(cv.pcr) # 99.5% of variance explained with 3 components, lowest CV score at 148 components
+
+validationplot(cv.pcr, val.type = 'MSEP') # looks like we get to over 275 components before MSEP starts to rise
+
+
+# get predictions for train and test matrices models with various numbers of PCs levels
+
+pcr2_test = predict(cv.pcr, newdata = x_test, ncomp = 2)
+pcr3_test = predict(cv.pcr, newdata = x_test, ncomp = 3)
+pcr25_test = predict(cv.pcr, newdata = x_test, ncomp = 25)
+pcr50_test = predict(cv.pcr, newdata = x_test, ncomp = 50)
+pcr100_test = predict(cv.pcr, newdata = x_test, ncomp = 100)
+pcr148_test = predict(cv.pcr, newdata = x_test, ncomp = 148)
+pcr200_test = predict(cv.pcr, newdata = x_test, ncomp = 200)
+pcr300_test = predict(cv.pcr, newdata = x_test, ncomp = 300)
+
+
+
+pcr2_train = predict(cv.pcr, newdata = x_train, ncomp = 2)
+pcr3_train = predict(cv.pcr, newdata = x_train, ncomp = 3)
+pcr25_train = predict(cv.pcr, newdata = x_train, ncomp = 25)
+pcr50_train = predict(cv.pcr, newdata = x_train, ncomp = 50)
+pcr100_train = predict(cv.pcr, newdata = x_train, ncomp = 100)
+pcr148_train = predict(cv.pcr, newdata = x_train, ncomp = 148)
+pcr200_train = predict(cv.pcr, newdata = x_train, ncomp = 200)
+pcr300_train = predict(cv.pcr, newdata = x_train, ncomp = 300)
+
+# Find MSE
+mean((pcr2_train - y)^2) # Train MSE = 0.1330271
+mean((pcr3_train - y)^2) # Train MSE = 0.1320182
+mean((pcr25_train - y)^2) # Train MSE = 0.0238158
+mean((pcr50_train - y)^2) # Train MSE = 0.01910352
+mean((pcr100_train - y)^2) # Train MSE = 0.01482911
+mean((pcr148_train - y)^2) # Train MSE = 0.01221019
+mean((pcr200_train - y)^2) # Train MSE = 0.01093256
+mean((pcr300_train - y)^2) # Train MSE = 0.008706129
+
+# write csv file
+write.csv(exp(pcr2_test), file = 'pcr2.csv')
+write.csv(exp(pcr3_test), file = 'pcr3.csv')
+write.csv(exp(pcr25_test), file = 'pcr25.csv')
+write.csv(exp(pcr50_test), file = 'pcr50.csv')
+write.csv(exp(pcr100_test), file = 'pcr100.csv')
+write.csv(exp(pcr148_test), file = 'pcr148.csv')
+write.csv(exp(pcr200_test), file = 'pcr200.csv')
+write.csv(exp(pcr300_test), file = 'pcr300.csv')
+
+
+```
+
+```{r PLSR}
+# fit plsr
+cv.plsr = plsr(y ~ ., data = x_train, validation = 'CV')
+
+summary(cv.plsr) # 95% of variance explained with 3 component, 99.9% of variance explained with 4 components, 22 components has best CV score
+
+validationplot(cv.plsr, val.type = 'MSEP') #MSEP starts to rise a bit before 150 components
+
+# get predictions for train and test matrices models with various numbers of PCs levels
+
+plsr3_test = predict(cv.plsr, newdata = x_test, ncomp = 3)
+plsr4_test = predict(cv.plsr, newdata = x_test, ncomp = 4)
+plsr10_test = predict(cv.plsr, newdata = x_test, ncomp = 10)
+plsr15_test = predict(cv.plsr, newdata = x_test, ncomp = 15)
+plsr22_test = predict(cv.plsr, newdata = x_test, ncomp = 22)
+plsr30_test = predict(cv.plsr, newdata = x_test, ncomp = 30)
+plsr50_test = predict(cv.plsr, newdata = x_test, ncomp = 50)
+plsr100_test = predict(cv.plsr, newdata = x_test, ncomp = 100)
+
+
+plsr3_train = predict(cv.plsr, newdata = x_train, ncomp = 3)
+plsr4_train = predict(cv.plsr, newdata = x_train, ncomp = 4)
+plsr10_train = predict(cv.plsr, newdata = x_train, ncomp = 10)
+plsr15_train = predict(cv.plsr, newdata = x_train, ncomp = 15)
+plsr22_train = predict(cv.plsr, newdata = x_train, ncomp = 22)
+plsr30_train = predict(cv.plsr, newdata = x_train, ncomp = 30)
+plsr50_train = predict(cv.plsr, newdata = x_train, ncomp = 50)
+plsr100_train = predict(cv.plsr, newdata = x_train, ncomp = 100)
+
+
+# Find MSE
+mean((plsr3_train - y)^2) # Train MSE = 0.1120478
+mean((plsr4_train - y)^2) # Train MSE = 0.08075607
+mean((plsr10_train - y)^2) # Train MSE = 0.02031044
+mean((plsr15_train - y)^2) # Train MSE = 0.01495079
+mean((plsr22_train - y)^2) # Train MSE = 0.01196358
+mean((plsr30_train - y)^2) # Train MSE = 0.01067703
+mean((plsr50_train - y)^2) # Train MSE = 0.009426396
+mean((plsr100_train - y)^2) # Train MSE = 0.009217925
+
+
+
+# write csv file
+write.csv(exp(plsr3_test), file = 'plsr3.csv')
+write.csv(exp(plsr4_test), file = 'plsr4.csv')
+write.csv(exp(plsr10_test), file = 'plsr10.csv')
+write.csv(exp(plsr15_test), file = 'plsr15.csv')
+write.csv(exp(plsr22_test), file = 'plsr22.csv')
+write.csv(exp(plsr30_test), file = 'plsr30.csv')
+write.csv(exp(plsr50_test), file = 'plsr50.csv')
+write.csv(exp(plsr100_test), file = 'plsr100.csv')
+```
+
+
+```{r converting back to character}
+
+fac_to_character = function(df) {
+  df$OverallQualXOverallCond = as.character(df$OverallQualXOverallCond)
+  df$ExterQualXExterCond = as.character(df$ExterQualXExterCond)
+  df$BsmtQualXBsmtCond = as.character(df$BsmtQualXBsmtCond)
+  df$BsmtFinSF1XBsmtFinType1 = as.character(df$BsmtFinSF1XBsmtFinType1)
+  df$BsmtFinSF2XBsmtFinType2 = as.character(df$BsmtFinSF2XBsmtFinType2)
+  df$GarageQualXGarageCond = as.character(df$GarageQualXGarageCond)
+  df$HeatingXHeatingQC = as.character(df$HeatingXHeatingQC)
+  df$SaleTypeXSaleCondition = as.character(df$SaleTypeXSaleCondition)
+  df$NeighborhoodXBldgType = as.character(df$NeighborhoodXBldgType)
+  df$MasVnrAreaXMasVnrType = as.character(df$MasVnrAreaXMasVnrType)
+  df$KitchenAbvGrXKitchenQual = as.character(df$KitchenAbvGrXKitchenQual)
+  df$FireplacesXFireplaceQu = as.character(df$FireplacesXFireplaceQu)
+  df$GarageTypeXGarageQual = as.character(df$GarageTypeXGarageQual)
+  df$GarageTypeXGarageCond = as.character(df$GarageTypeXGarageCond)
+  df$GarageQualXGarageCond = as.character(df$GarageQualXGarageCond)
+  df$LandContourXLandSlope = as.character(df$OverallQualXOverallCond)
+  df$Condition1XCondition2 = as.character(df$OverallQualXOverallCond)
+  df$RoofStyleXRoofMatl = as.character(df$RoofStyleXRoofMatl)  
+ 
+  return(df)
+}
+
+df_united1 = fac_to_character(df_united)
+y = response_variable
+x_train = df_united[1:1460, ]
+x_test = df_united[1461:2919, ]
+
+```
+
+
+```{r}
+
+y = response_variable
+x_train = df_united[1:1460, ]
+x_test = df_united[1461:2919, ]
+
+
+#Training the tree to predict the median value of owner-occupied homes (in $1k).
+tree_model = tree(y ~ ., data = x_train)
+summary(tree_model)
+
+#Visually inspecting the regression tree.
+plot(tree_model)
+text(tree_model, pretty = 0)
+
+#Performing cross-validation.
+set.seed(0)
+cv.tree_model = cv.tree(tree_model)
+par(mfrow = c(1, 2))
+plot(cv.tree_model$size, cv.tree_model$dev, type = "b",
+     xlab = "Terminal Nodes", ylab = "RSS")
+plot(cv.tree_model$k, cv.tree_model$dev, type  = "b",
+     xlab = "Alpha", ylab = "RSS")
+
+
+
+#Pruning the tree to have 4 terminal nodes.
+prune.boston = prune.tree(tree.boston, best = 4)
+par(mfrow = c(1, 1))
+plot(prune.boston)
+text(prune.boston, pretty = 0)
+
+#Calculating and assessing the MSE of the test data on the overall tree.
+tree_predict_test = predict(tree_model, newdata = x_test)
+write.csv(x = exp(tree_predict_test), file = 'tree.csv')
+
+
+
+
+##################################
+#####Bagging & Random Forests#####
+##################################
+library(randomForest)
+
+#Fitting an initial random forest to the training subset.
+randomforest_model = randomForest(y ~ ., data = x_train, importance = TRUE, na.action = 'na.omit')
+randomforest_model
+
+
+#The MSE and percent variance explained are based on out-of-bag estimates,
+#yielding unbiased error estimates. The model reports that mtry = 4, which is
+#the number of variables randomly chosen at each split. Since we have 13 overall
+#variables, we could try all 13 possible values of mtry. We will do so, record
+#the results, and make a plot.
+
+#Varying the number of variables used at each step of the random forest procedure.
+set.seed(0)
+oob.err = numeric(13)
+for (mtry in 1:13) {
+  fit = randomForest(y ~ ., data = df_train, mtry = mtry)
+  oob.err[mtry] = fit$mse[500]
+  cat("We're performing iteration", mtry, "\n")
+}
+
+#Visualizing the OOB error.
+plot(1:13, oob.err, pch = 16, type = "b",
+     xlab = "Variables Considered at Each Split",
+     ylab = "OOB Mean Squared Error",
+     main = "Random Forest OOB Error Rates\nby # of Variables")
+
+
+#Can visualize a variable importance plot.
+importance(randomforest_model)
+varImpPlot(randomforest_model)
+
+
+
+##################
+#####Boosting#####
+##################
+library(gbm)
+
+#Fitting 10,000 trees with a depth of 4.
+set.seed(0)
+boost.ames = gbm(y ~ ., data = x_train,
+                   distribution = "gaussian",
+                   n.trees = 10000,
+                   interaction.depth = 4)
+
+#Inspecting the relative influence.
+par(mfrow = c(1, 1))
+summary(boost.ames)
+
+#Let’s make a prediction on the test set. With boosting, the number of trees is
+#a tuning parameter; having too many can cause overfitting. In general, we should
+#use cross validation to select the number of trees. Instead, we will compute the
+#test error as a function of the number of trees and make a plot for illustrative
+#purposes.
+n.trees = seq(from = 100, to = 10000, by = 100)
+predmat = predict(boost.ames, newdata = df_tes, n.trees = n.trees)
+
+#Produces 100 different predictions for each of the 152 observations in our
+#test set.
+dim(predmat)
+
+#Calculating the boosted errors.
+par(mfrow = c(1, 1))
+berr = with(x_train, apply((predmat - medv)^2, 2, mean))
+plot(n.trees, berr, pch = 16,
+     ylab = "Mean Squared Error",
+     xlab = "# Trees",
+     main = "Boosting Test Error")
+
+#Include the best OOB error from the random forest.
+abline(h = min(oob.err), col = "red")
+
+#Increasing the shrinkage parameter; a higher proportion of the errors are
+#carried over.
+set.seed(0)
+boost.ames2 = gbm(medv ~ ., data = x_train,
+                    distribution = "gaussian",
+                    n.trees = 10000,
+                    interaction.depth = 4,
+                    shrinkage = 0.1)
+predmat2 = predict(boost.ames2, newdata = x_test, n.trees = n.trees)
+
+berr2 = with(x_test, apply((predmat2 - medv)^2, 2, mean))
+plot(n.trees, berr2, pch = 16,
+     ylab = "Mean Squared Error",
+     xlab = "# Trees",
+     main = "Boosting Test Error")
+```
+
+
+```{r}
+#Loading the tree library for fitting classification and regression trees.
+library(tree)
+
+#Loading the ISLR library in order to use the Carseats dataset.
+library(ISLR)
+
+#Making data manipulation easier.
+help(Carseats)
+attach(Carseats)
+
+#Looking at the variable of interest, Sales.
+hist(Sales)
+summary(Sales)
+
+#Creating a binary categorical variable High based on the continuous Sales
+#variable and adding it to the original data frame.
+High = ifelse(Sales <= 8, "No", "Yes")
+Carseats = data.frame(Carseats, High)
+
+#Fit a tree to the data; note that we are excluding Sales from the formula.
+tree.carseats = tree(High ~ . - Sales, split = "gini", data = Carseats)
+summary(tree.carseats)
+
+#The output shows the variables actually used within the tree, the number of
+#terminal nodes, the residual mean deviance based on the Gini index, and
+#the misclassification error rate.
+
+#Plotting the classification tree.
+plot(tree.carseats)
+text(tree.carseats, pretty = 0) #Yields category names instead of dummy variables.
+
+#Detailed information for the splits of the classification tree.
+tree.carseats
+
+#The output shows the variables used at each node, the split rule, the number
+#of observations at each node, the deviance based on the Gini index, the
+#majority class value based on the observations in the node, and the associated
+#probabilities of class membership at each node. Terminal nodes are denoted
+#by asterisks.
+
+#Splitting the data into training and test sets by an 70% - 30% split.
+set.seed(0)
+train = sample(1:nrow(Carseats), 7*nrow(Carseats)/10) #Training indices.
+Carseats.test = Carseats[-train, ] #Test dataset.
+High.test = High[-train] #Test response.
+
+#Ftting and visualizing a classification tree to the training data.
+tree.carseats = tree(High ~ . - Sales, data = Carseats, subset = train)
+plot(tree.carseats)
+text(tree.carseats, pretty = 0)
+summary(tree.carseats)
+tree.carseats
+
+#Using the trained decision tree to classify the test data.
+tree.pred = predict(tree.carseats, Carseats.test, type = "class")
+tree.pred
+
+#Assessing the accuracy of the overall tree by constructing a confusion matrix.
+table(tree.pred, High.test)
+(60 + 42)/120
+
+#Performing cross-validation in order to decide how many splits to prune; using
+#misclassification as the basis for pruning.
+set.seed(0)
+cv.carseats = cv.tree(tree.carseats, FUN = prune.misclass)
+
+#Inspecting the elements of the cv.tree() object.
+names(cv.carseats)
+cv.carseats
+
+#Size indicates the number of terminal nodes. Deviance is the criterion we
+#specify; in this case it is the misclassification rate. K is analogous to the
+#cost complexity tuning parameter alpha. Method indicates the specified criterion.
+
+#Visually inspecting the results of the cross-validation by considering tree
+#complexity.
+par(mfrow = c(1, 2))
+plot(cv.carseats$size, cv.carseats$dev, type = "b",
+     xlab = "Terminal Nodes", ylab = "Misclassified Observations")
+plot(cv.carseats$k, cv.carseats$dev, type  = "b",
+     xlab = "Alpha", ylab = "Misclassified Observations")
+
+#Pruning the overall tree to have 4 terminal nodes; choose the best tree with
+#4 terminal nodes based on cost complexity pruning.
+par(mfrow = c(1, 1))
+prune.carseats = prune.misclass(tree.carseats, best = 4)
+plot(prune.carseats)
+text(prune.carseats, pretty = 0)
+
+#Assessing the accuracy of the pruned tree with 4 terminal nodes by constructing
+#a confusion matrix.
+tree.pred = predict(prune.carseats, Carseats.test, type = "class")
+table(tree.pred, High.test)
+(53 + 33)/120
+
+#Originally we had 25 terminal nodes and an accuracy of 85%; now, there are
+#only 4 terminal nodes with an accuracy of about 71.67%.
+
+
+
+##########################
+#####Regression Trees#####
+##########################
+#Inspecting the housing values in the suburbs of Boston.
+library(MASS)
+help(Boston)
+
+#Creating a training set on 70% of the data.
+set.seed(0)
+train = sample(1:nrow(Boston), 7*nrow(Boston)/10)
+
+```
+
+
+
+```{r Ensembling}
+
+# need to create stack of UNCORRELATED models. Need to track correlations of all the models we create. 
+
+#
 
 ```
 
