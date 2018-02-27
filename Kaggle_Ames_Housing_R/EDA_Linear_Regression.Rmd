@@ -1361,294 +1361,11 @@ vec
 
 ```{r boxplots of categoricals}
 
-
-
-
-grid.arrange(tr + geom_bar(aes(x=MSSubClass)), 
-             te + geom_bar(aes(x=MSSubClass)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=MSZoning)), 
-             te + geom_bar(aes(x=MSZoning)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Street)), 
-             te + geom_bar(aes(x=Street)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Alley)), 
-             te + geom_bar(aes(x=Alley)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=LotShape)), 
-             te + geom_bar(aes(x=LotShape)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=LandContour)), 
-             te + geom_bar(aes(x=LandContour)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=LotConfig)), 
-             te + geom_bar(aes(x=LotConfig)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=LandSlope)), 
-             te + geom_bar(aes(x=LandSlope)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Neighborhood)), 
-             te + geom_bar(aes(x=Neighborhood)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Condition1)), 
-             te + geom_bar(aes(x=Condition1)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Condition2)), 
-             te + geom_bar(aes(x=Condition2)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BldgType)), 
-             te + geom_bar(aes(x=BldgType)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=HouseStyle)), 
-             te + geom_bar(aes(x=HouseStyle)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=OverallQual)), 
-             te + geom_bar(aes(x=OverallQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=OverallCond)), 
-             te + geom_bar(aes(x=OverallCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=RoofStyle)), 
-             te + geom_bar(aes(x=RoofStyle)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=RoofMatl)), 
-             te + geom_bar(aes(x=RoofMatl)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Exterior1st)), 
-             te + geom_bar(aes(x=Exterior1st)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Exterior2nd)), 
-             te + geom_bar(aes(x=Exterior2nd)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=ExterCond)), 
-             te + geom_bar(aes(x=ExterCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=ExterQual)), 
-             te + geom_bar(aes(x=ExterQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Foundation)), 
-             te + geom_bar(aes(x=Foundation)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtQual)), 
-             te + geom_bar(aes(x=BsmtQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtCond)), 
-             te + geom_bar(aes(x=BsmtCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtExposure)), 
-             te + geom_bar(aes(x=BsmtExposure)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtFinType1)), 
-             te + geom_bar(aes(x=BsmtFinType1)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtFinType2)), 
-             te + geom_bar(aes(x=BsmtFinType2)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Heating)), 
-             te + geom_bar(aes(x=Heating)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=HeatingQC)), 
-             te + geom_bar(aes(x=HeatingQC)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=CentralAir)), 
-             te + geom_bar(aes(x=CentralAir)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Electrical)), 
-             te + geom_bar(aes(x=Electrical)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtFullBath)), 
-             te + geom_bar(aes(x=BsmtFullBath)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtHalfBath)), 
-             te + geom_bar(aes(x=BsmtHalfBath)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=FullBath)), 
-             te + geom_bar(aes(x=FullBath)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=HalfBath)), 
-             te + geom_bar(aes(x=HalfBath)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BedroomAbvGr)), 
-             te + geom_bar(aes(x=BedroomAbvGr)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=KitchenAbvGr)), 
-             te + geom_bar(aes(x=KitchenAbvGr)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=KitchenQual)), 
-             te + geom_bar(aes(x=KitchenQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Functional)), 
-             te + geom_bar(aes(x=Functional)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Fireplaces)), 
-             te + geom_bar(aes(x=Fireplaces)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=FireplaceQu)), 
-             te + geom_bar(aes(x=FireplaceQu)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageType)), 
-             te + geom_bar(aes(x=GarageType)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageFinish)), 
-             te + geom_bar(aes(x=GarageFinish)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageCars)), 
-             te + geom_bar(aes(x=GarageCars)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageQual)), 
-             te + geom_bar(aes(x=GarageQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageCond)), 
-             te + geom_bar(aes(x=GarageCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=PavedDrive)), 
-             te + geom_bar(aes(x=PavedDrive)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=PoolQC)), 
-             te + geom_bar(aes(x=PoolQC)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Fence)), 
-             te + geom_bar(aes(x=Fence)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=MiscFeature)), 
-             te + geom_bar(aes(x=MiscFeature)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=MoSold)), 
-             te + geom_bar(aes(x=MoSold)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=SaleType)), 
-             te + geom_bar(aes(x=SaleType)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=SaleCondition)), 
-             te + geom_bar(aes(x=SaleCondition)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=OverallQualXOverallCond)), 
-             te + geom_bar(aes(x=OverallQualXOverallCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=ExterQualXExterCond)), 
-             te + geom_bar(aes(x=ExterQualXExterCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtQualXBsmtCond)), 
-             te + geom_bar(aes(x=BsmtQualXBsmtCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtFinSF1XBsmtFinType1)), 
-             te + geom_bar(aes(x=BsmtFinSF1XBsmtFinType1)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtFinSF2XBsmtFinType2)), 
-             te + geom_bar(aes(x=BsmtFinSF2XBsmtFinType2)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=HeatingXHeatingQC)), 
-             te + geom_bar(aes(x=HeatingXHeatingQC)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=SaleTypeXSaleCondition)), 
-             te + geom_bar(aes(x=SaleTypeXSaleCondition)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=NeighborhoodXBldgType)), 
-             te + geom_bar(aes(x=NeighborhoodXBldgType)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=MasVnrAreaXMasVnrType)), 
-             te + geom_bar(aes(x=MasVnrAreaXMasVnrType)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=KitchenAbvGrXKitchenQual)), 
-             te + geom_bar(aes(x=KitchenAbvGrXKitchenQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=FireplacesXFireplaceQu)), 
-             te + geom_bar(aes(x=FireplacesXFireplaceQu)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageTypeXGarageQual)), 
-             te + geom_bar(aes(x=GarageTypeXGarageQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageTypeXGarageCond)), 
-             te + geom_bar(aes(x=GarageTypeXGarageCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=LandContourXLandSlope)), 
-             te + geom_bar(aes(x=LandContourXLandSlope)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Condition1XCondition2)), 
-             te + geom_bar(aes(x=Condition1XCondition2)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=RoofStyleXRoofMatl)), 
-             te + geom_bar(aes(x=RoofStyleXRoofMatl)), 
-             ncol = 2)
-
-```
-
-
-
-```{r EDA of Categoricals}
-
 tr = ggplot(data = df_united[1:1460, ])
 te = ggplot(data = df_united[1460:2919, ])
 
+
+
 grid.arrange(tr + geom_bar(aes(x=MSSubClass)), 
              te + geom_bar(aes(x=MSSubClass)), 
              ncol = 2)
@@ -1683,14 +1400,6 @@ grid.arrange(tr + geom_bar(aes(x=LandSlope)),
 
 grid.arrange(tr + geom_bar(aes(x=Neighborhood)), 
              te + geom_bar(aes(x=Neighborhood)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Condition1)), 
-             te + geom_bar(aes(x=Condition1)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Condition2)), 
-             te + geom_bar(aes(x=Condition2)), 
              ncol = 2)
 
 grid.arrange(tr + geom_bar(aes(x=BldgType)), 
@@ -1859,70 +1568,6 @@ grid.arrange(tr + geom_bar(aes(x=SaleType)),
 
 grid.arrange(tr + geom_bar(aes(x=SaleCondition)), 
              te + geom_bar(aes(x=SaleCondition)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=OverallQualXOverallCond)), 
-             te + geom_bar(aes(x=OverallQualXOverallCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=ExterQualXExterCond)), 
-             te + geom_bar(aes(x=ExterQualXExterCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtQualXBsmtCond)), 
-             te + geom_bar(aes(x=BsmtQualXBsmtCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtFinSF1XBsmtFinType1)), 
-             te + geom_bar(aes(x=BsmtFinSF1XBsmtFinType1)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=BsmtFinSF2XBsmtFinType2)), 
-             te + geom_bar(aes(x=BsmtFinSF2XBsmtFinType2)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=HeatingXHeatingQC)), 
-             te + geom_bar(aes(x=HeatingXHeatingQC)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=SaleTypeXSaleCondition)), 
-             te + geom_bar(aes(x=SaleTypeXSaleCondition)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=NeighborhoodXBldgType)), 
-             te + geom_bar(aes(x=NeighborhoodXBldgType)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=MasVnrAreaXMasVnrType)), 
-             te + geom_bar(aes(x=MasVnrAreaXMasVnrType)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=KitchenAbvGrXKitchenQual)), 
-             te + geom_bar(aes(x=KitchenAbvGrXKitchenQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=FireplacesXFireplaceQu)), 
-             te + geom_bar(aes(x=FireplacesXFireplaceQu)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageTypeXGarageQual)), 
-             te + geom_bar(aes(x=GarageTypeXGarageQual)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=GarageTypeXGarageCond)), 
-             te + geom_bar(aes(x=GarageTypeXGarageCond)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=LandContourXLandSlope)), 
-             te + geom_bar(aes(x=LandContourXLandSlope)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=Condition1XCondition2)), 
-             te + geom_bar(aes(x=Condition1XCondition2)), 
-             ncol = 2)
-
-grid.arrange(tr + geom_bar(aes(x=RoofStyleXRoofMatl)), 
-             te + geom_bar(aes(x=RoofStyleXRoofMatl)), 
              ncol = 2)
 
 ```
@@ -2048,6 +1693,35 @@ grid.arrange(tr + geom_histogram(aes(x=OthrRmsAbvGrd)),
 grid.arrange(tr + geom_histogram(aes(x=OutdoorSF)), 
              te + geom_histogram(aes(x=OutdoorSF)), 
              ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=OverallQualXOverallCond)), 
+             te + geom_histogram(aes(x=OverallQualXOverallCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=ExterQualXExterCond)), 
+             te + geom_histogram(aes(x=ExterQualXExterCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=BsmtQualXBsmtCond)), 
+             te + geom_histogram(aes(x=BsmtQualXBsmtCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=KitchenAbvGrXKitchenQual)), 
+             te + geom_histogram(aes(x=KitchenAbvGrXKitchenQual)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=FireplacesXFireplaceQu)), 
+             te + geom_histogram(aes(x=FireplacesXFireplaceQu)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=GarageQualXGarageCond)), 
+             te + geom_histogram(aes(x=GarageQualXGarageCond)), 
+             ncol = 2)
+
+grid.arrange(tr + geom_histogram(aes(x=PoolAreaXPoolQC)), 
+             te + geom_histogram(aes(x=PoolAreaXPoolQC)), 
+             ncol = 2)
+
 
 ```
 
@@ -2601,10 +2275,10 @@ plot(cv.tree_model$k, cv.tree_model$dev, type  = "b",
 
 
 #Pruning the tree to have 4 terminal nodes.
-prune.boston = prune.tree(tree.boston, best = 4)
+prune.ames = prune.tree(tree_model, best = 4)
 par(mfrow = c(1, 1))
-plot(prune.boston)
-text(prune.boston, pretty = 0)
+plot(prune.ames)
+text(prune.ames, pretty = 0)
 
 #Calculating and assessing the MSE of the test data on the overall tree.
 tree_predict_test = predict(tree_model, newdata = x_test)
@@ -2630,26 +2304,27 @@ randomforest_model
 #the results, and make a plot.
 
 #Varying the number of variables used at each step of the random forest procedure.
-set.seed(0)
-oob.err = numeric(13)
-for (mtry in 1:13) {
-  fit = randomForest(y ~ ., data = df_train, mtry = mtry)
-  oob.err[mtry] = fit$mse[500]
-  cat("We're performing iteration", mtry, "\n")
-}
-
-#Visualizing the OOB error.
-plot(1:13, oob.err, pch = 16, type = "b",
-     xlab = "Variables Considered at Each Split",
-     ylab = "OOB Mean Squared Error",
-     main = "Random Forest OOB Error Rates\nby # of Variables")
+# set.seed(0)
+# oob.err = numeric(13)
+# for (mtry in 1:13) {
+#   fit = randomForest(y ~ ., data = df_train, mtry = mtry)
+#   oob.err[mtry] = fit$mse[500]
+#   cat("We're performing iteration", mtry, "\n")
+# }
+# 
+# #Visualizing the OOB error.
+# plot(1:13, oob.err, pch = 16, type = "b",
+#      xlab = "Variables Considered at Each Split",
+#      ylab = "OOB Mean Squared Error",
+#      main = "Random Forest OOB Error Rates\nby # of Variables")
 
 
 #Can visualize a variable importance plot.
 importance(randomforest_model)
 varImpPlot(randomforest_model)
 
-
+randomforest_predict_test = predict(randomforest_model, newdata = x_test)
+write.csv(x = exp(randomforest_predict_test), file = 'randomforest.csv')
 
 ##################
 #####Boosting#####
@@ -2661,7 +2336,7 @@ set.seed(0)
 boost.ames = gbm(y ~ ., data = x_train,
                    distribution = "gaussian",
                    n.trees = 10000,
-                   interaction.depth = 4)
+                   interaction.depth = 15)
 
 #Inspecting the relative influence.
 par(mfrow = c(1, 1))
@@ -2673,7 +2348,7 @@ summary(boost.ames)
 #test error as a function of the number of trees and make a plot for illustrative
 #purposes.
 n.trees = seq(from = 100, to = 10000, by = 100)
-predmat = predict(boost.ames, newdata = df_tes, n.trees = n.trees)
+predmat = predict(boost.ames, newdata = x_train, n.trees = n.trees)
 
 #Produces 100 different predictions for each of the 152 observations in our
 #test set.
@@ -2681,7 +2356,7 @@ dim(predmat)
 
 #Calculating the boosted errors.
 par(mfrow = c(1, 1))
-berr = with(x_train, apply((predmat - medv)^2, 2, mean))
+berr = with(x_train, apply((predmat - y)^2, 2, mean))
 plot(n.trees, berr, pch = 16,
      ylab = "Mean Squared Error",
      xlab = "# Trees",
@@ -2693,14 +2368,14 @@ abline(h = min(oob.err), col = "red")
 #Increasing the shrinkage parameter; a higher proportion of the errors are
 #carried over.
 set.seed(0)
-boost.ames2 = gbm(medv ~ ., data = x_train,
+boost.ames2 = gbm(y ~ ., data = x_train,
                     distribution = "gaussian",
                     n.trees = 10000,
-                    interaction.depth = 4,
+                    interaction.depth = 15,
                     shrinkage = 0.1)
-predmat2 = predict(boost.ames2, newdata = x_test, n.trees = n.trees)
+predmat2 = predict(boost.ames2, newdata = x_train, n.trees = n.trees)
 
-berr2 = with(x_test, apply((predmat2 - medv)^2, 2, mean))
+berr2 = with(x_train, apply((predmat2 - y)^2, 2, mean))
 plot(n.trees, berr2, pch = 16,
      ylab = "Mean Squared Error",
      xlab = "# Trees",
